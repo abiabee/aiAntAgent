@@ -169,6 +169,7 @@ export async function createInvoice(
     whenDue?: string;
     termName?: string;
     description?: string;
+    baseCurrency?: string;
     currency?: string;
   }
 ): Promise<CreateInvoiceResult> {
@@ -190,6 +191,7 @@ export async function createInvoice(
     whenDue: invoiceData.whenDue || formatDate(dueDate),
     termName: invoiceData.termName,
     description: invoiceData.description,
+    baseCurrency: invoiceData.baseCurrency,
     currency: invoiceData.currency,
     lineItems: invoiceData.lineItems,
   };

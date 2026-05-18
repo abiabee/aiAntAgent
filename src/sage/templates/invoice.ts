@@ -109,6 +109,9 @@ export const createInvoiceTemplate = `
     {{#if description}}
     <DESCRIPTION>{{description}}</DESCRIPTION>
     {{/if}}
+    {{#if baseCurrency}}
+    <BASECURR>{{baseCurrency}}</BASECURR>
+    {{/if}}
     {{#if currency}}
     <CURRENCY>{{currency}}</CURRENCY>
     {{/if}}
@@ -151,7 +154,8 @@ export interface CreateInvoiceData {
   whenDue: string;      // MM/DD/YYYY format
   termName?: string;
   description?: string;
-  currency?: string;
+  baseCurrency?: string;  // Base currency (e.g., "USD")
+  currency?: string;      // Transaction currency
   lineItems: InvoiceLineItem[];
 }
 

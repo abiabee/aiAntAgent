@@ -104,9 +104,9 @@ export function formatDate(value: unknown): string {
  * Invoice table columns
  */
 export const invoiceColumns: TableColumn[] = [
-  { key: 'RECORDNO', header: 'Record #', width: 12 },
-  { key: 'RECORDID', header: 'Invoice ID', width: 15 },
-  { key: 'CUSTOMERID', header: 'Customer', width: 15 },
+  { key: 'RECORDNO', header: 'Record #', width: 12, format: formatRaw },
+  { key: 'RECORDID', header: 'Invoice ID', width: 15, format: formatRaw },
+  { key: 'CUSTOMERID', header: 'Customer', width: 20, format: formatRaw },
   { key: 'TRX_TOTALENTERED', header: 'Amount', width: 12, align: 'right', format: formatCurrency },
   { key: 'TRX_TOTALDUE', header: 'Due', width: 12, align: 'right', format: formatCurrency },
   { key: 'STATE', header: 'Status', width: 15, format: formatStatus },
@@ -114,10 +114,20 @@ export const invoiceColumns: TableColumn[] = [
 ];
 
 /**
+ * Format value as-is (no number formatting)
+ */
+export function formatRaw(value: unknown): string {
+  if (value === null || value === undefined) {
+    return chalk.gray('-');
+  }
+  return String(value);
+}
+
+/**
  * Customer table columns
  */
 export const customerColumns: TableColumn[] = [
-  { key: 'CUSTOMERID', header: 'Customer ID', width: 15 },
+  { key: 'CUSTOMERID', header: 'Customer ID', width: 20, format: formatRaw },
   { key: 'NAME', header: 'Name', width: 30 },
   { key: 'STATUS', header: 'Status', width: 12, format: formatStatus },
   { key: 'TERMNAME', header: 'Terms', width: 15 },

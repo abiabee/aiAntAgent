@@ -1,8 +1,8 @@
 {
-  "customerId": null,
-  "glAccountNo": null,
+  "customerId": "10776",
+  "glAccountNo": "10100",
   "accountLabel": null,
-  "locationId": null,
+  "locationId": 700,
   "departmentId": null,
   "currency": "USD",
   "termName": null,

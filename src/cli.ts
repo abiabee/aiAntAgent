@@ -12,6 +12,7 @@ import {
 import { listCustomers, getCustomer, Customer } from './sage/actions/listCustomers.js';
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
+import { formatSageErrors } from './sage/parser.js';
 import { 
   createTable, 
   invoiceColumns, 
@@ -316,9 +317,12 @@ async function handleCreateInvoice(
     return;
   }
 
+  const currency = defaults.currency || 'USD';
+
   printInfo(`Customer: ${customerId}`);
   printInfo(`GL Account: ${glAccountNo}`);
   printInfo(`Amount: ${formatCurrency(amount)}`);
+  printInfo(`Currency: ${currency}`);
   console.log();
 
   const count = cmd.count || 1;
@@ -330,6 +334,8 @@ async function handleCreateInvoice(
 
     const result = await createInvoice(client, {
       customerId,
+      baseCurrency: currency,
+      currency: currency,
       lineItems: [{
         glAccountNo,
         amount,
@@ -352,11 +358,20 @@ async function handleCreateInvoice(
         glAccountNo,
       });
     } else {
-      printError(`Failed: ${result.error}`);
-      failures.push({ error: result.error || 'Unknown error' });
+      // Format Sage errors nicely
+      const errorMessage = result.rawResponse?.error 
+        ? formatSageErrors(result.rawResponse.error)
+        : result.error || 'Unknown error';
+      
+      printError('Failed to create invoice:');
+      console.log();
+      console.log(chalk.red(errorMessage));
+      console.log();
+      
+      failures.push({ error: errorMessage });
 
       // Record failed combination
-      await memory.recordFailure({ customerId, glAccountNo }, result.error || 'Unknown error');
+      await memory.recordFailure({ customerId, glAccountNo }, errorMessage);
     }
   }
 
@@ -502,7 +517,7 @@ async function main(): Promise<void> {
   const input = args.join(' ').trim();
 
   console.log();
-  console.log(chalk.bold.blue('🔧 Sage Intacct Action Agent'));
+  console.log(chalk.bold.blue('ᯓ★ Sage Intacct Action Agent'));
   console.log(chalk.gray('─'.repeat(40)));
 
   if (!input) {

@@ -23,6 +23,14 @@ export interface SageError {
   description?: string;
   description2?: string;
   correction?: string;
+  allErrors?: SageErrorDetail[];
+}
+
+export interface SageErrorDetail {
+  errorno: string;
+  description: string;
+  description2: string;
+  correction: string;
 }
 
 /**
@@ -125,6 +133,7 @@ export function parseResponse(xmlString: string): SageResponse {
 
 /**
  * Extract error details from error element
+ * Sage errors have: errorno, description (often empty), description2 (actual message), correction
  */
 function extractError(errormessage: unknown): SageError {
   if (!errormessage) {
@@ -133,14 +142,65 @@ function extractError(errormessage: unknown): SageError {
 
   // Handle array of errors
   const errors = Array.isArray(errormessage) ? errormessage : [errormessage];
-  const firstError = errors[0];
+  
+  // Extract all error details
+  const allErrors: SageErrorDetail[] = errors.map((err: Record<string, string>) => ({
+    errorno: err.errorno || '',
+    description: err.description || '',
+    description2: err.description2 || '',
+    correction: err.correction || '',
+  }));
+
+  // Build the primary error message from the first error
+  // Combine description and description2 since description is often empty
+  const firstError = allErrors[0];
+  const mainDescription = [firstError.description, firstError.description2]
+    .filter(Boolean)
+    .join(' - ') || 'Unknown error';
 
   return {
     code: firstError.errorno,
-    description: firstError.description,
+    description: mainDescription,
     description2: firstError.description2,
     correction: firstError.correction,
+    allErrors,
   };
+}
+
+/**
+ * Decode HTML entities in a string
+ */
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#039;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)));
+}
+
+/**
+ * Format all Sage errors into a readable string
+ */
+export function formatSageErrors(error: SageError): string {
+  if (!error.allErrors || error.allErrors.length === 0) {
+    return decodeHtmlEntities(error.description || 'Unknown error');
+  }
+
+  const lines: string[] = [];
+  
+  for (const err of error.allErrors) {
+    const message = [err.description, err.description2].filter(Boolean).join(' - ');
+    if (message) {
+      lines.push(`[${err.errorno || 'ERROR'}] ${decodeHtmlEntities(message)}`);
+      if (err.correction) {
+        lines.push(`  → Fix: ${decodeHtmlEntities(err.correction)}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
 }
 
 /**
