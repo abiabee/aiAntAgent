@@ -7,3 +7,4 @@ export * from './invoice.js';
 export * from './customer.js';
 export * from './glaccount.js';
 export * from './payment.js';
+export * from './dimension.js';

@@ -212,12 +212,14 @@ export async function createInvoice(
   let recordId: string | undefined;
 
   // The create response typically includes the key of the created record
-  if (responseData?.ARINVOICE) {
-    const invoice = responseData.ARINVOICE as Record<string, unknown>;
-    recordNo = invoice.RECORDNO as string;
-    recordId = invoice.RECORDID as string;
+  // Check both uppercase and lowercase keys (API may return either)
+  const createdInvoice = responseData?.ARINVOICE || responseData?.arinvoice;
+  if (createdInvoice) {
+    const inv = createdInvoice as Record<string, unknown>;
+    recordNo = String(inv.RECORDNO || inv.recordno || '');
+    recordId = String(inv.RECORDID || inv.recordid || '');
   } else if (responseData?.['@_key']) {
-    recordNo = responseData['@_key'] as string;
+    recordNo = String(responseData['@_key']);
   }
 
   return {

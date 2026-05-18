@@ -1,0 +1,72 @@
+{
+  "invoice": {
+    "workingDefaults": {
+      "customerId": "10776",
+      "currency": "USD",
+      "glAccountNo": 60600,
+      "locationId": 110,
+      "departmentId": 100
+    },
+    "badValues": {
+      "customerIds": [],
+      "glAccountNos": [
+        "10100"
+      ],
+      "locationIds": [],
+      "departmentIds": []
+    },
+    "successfulCombos": [
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:06:45.837Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:07:38.338Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:09:39.291Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:09:40.705Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:09:42.146Z"
+      }
+    ]
+  },
+  "payment": {
+    "workingDefaults": {},
+    "badValues": {
+      "customerIds": [],
+      "glAccountNos": [],
+      "locationIds": [],
+      "departmentIds": []
+    },
+    "successfulCombos": []
+  },
+  "lastUpdated": "2026-05-18T22:09:42.146Z"
+}

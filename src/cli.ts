@@ -6,13 +6,15 @@ import {
   getInvoice, 
   queryInvoiceById, 
   listOpenInvoices, 
-  createInvoice,
   Invoice 
 } from './sage/actions/invoice.js';
 import { listCustomers, getCustomer, Customer } from './sage/actions/listCustomers.js';
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
 import { formatSageErrors } from './sage/parser.js';
+import { createInvoiceWithLearning, LearningAttempt } from './sage/learningInvoice.js';
+import { getKnowledgeStore } from './sage/knowledge.js';
+import { describeErrorType } from './sage/errorClassifier.js';
 import { 
   createTable, 
   invoiceColumns, 
@@ -23,7 +25,8 @@ import {
   printInfo, 
   printHeader,
   printKeyValues,
-  formatCurrency
+  formatCurrency,
+  formatRaw
 } from './output/table.js';
 
 // =============================================================================
@@ -121,9 +124,10 @@ function parseCommand(input: string): ParsedCommand {
     }
 
     // Extract amount: "$100" or "100 dollars" or "amount 100"
-    const amountMatch = lower.match(/\$?([\d.]+)(?:\s*dollars?)?|amount\s+([\d.]+)/i);
+    // Must have $ prefix or "dollars" suffix or "amount" prefix to distinguish from count
+    const amountMatch = lower.match(/\$([\d.]+)|(\d+\.?\d*)\s*dollars?|amount\s+([\d.]+)/i);
     if (amountMatch) {
-      command.amount = parseFloat(amountMatch[1] || amountMatch[2]);
+      command.amount = parseFloat(amountMatch[1] || amountMatch[2] || amountMatch[3]);
     }
 
     // Extract GL account
@@ -157,6 +161,13 @@ function parseCommand(input: string): ParsedCommand {
         command.options.defaultAmount = match[1];
       }
     }
+    return command;
+  }
+
+  // Reset/clear knowledge
+  if ((lower.includes('reset') || lower.includes('clear')) && 
+      (lower.includes('knowledge') || lower.includes('learned') || lower.includes('learning'))) {
+    command.action = 'reset-knowledge';
     return command;
   }
 
@@ -298,51 +309,66 @@ async function handleCreateInvoice(
   memory: MemoryStore,
   cmd: ParsedCommand
 ): Promise<void> {
-  printHeader(`Creating ${cmd.count || 1} Invoice(s)`);
+  printHeader(`Creating ${cmd.count || 1} Invoice(s) with Learning`);
 
-  // Get defaults
+  // Get defaults from both memory store and knowledge store
   const defaults = await memory.getDefaults();
+  const knowledge = getKnowledgeStore();
+  const invoiceKnowledge = await knowledge.getActionKnowledge('invoice');
   
-  const customerId = cmd.customerId || defaults.customerId;
-  const glAccountNo = cmd.glAccount || defaults.glAccountNo;
+  // Prefer command-line values, then knowledge working defaults, then memory defaults
+  const customerId = cmd.customerId || invoiceKnowledge.workingDefaults.customerId || defaults.customerId;
+  const glAccountNo = cmd.glAccount || invoiceKnowledge.workingDefaults.glAccountNo || defaults.glAccountNo;
   const amount = cmd.amount || defaults.defaultAmount || 100;
+  const currency = invoiceKnowledge.workingDefaults.currency || defaults.currency || 'USD';
 
-  if (!customerId) {
-    printError('No customer ID specified. Use "create invoice for customer CUST-001" or "set default customer CUST-001"');
-    return;
+  printInfo(`Starting values:`);
+  printInfo(`  Customer: ${customerId || chalk.yellow('(will auto-discover)')}`);
+  printInfo(`  GL Account: ${glAccountNo || chalk.yellow('(will auto-discover)')}`);
+  printInfo(`  Amount: ${formatCurrency(amount)}`);
+  printInfo(`  Currency: ${currency}`);
+  
+  if (invoiceKnowledge.badValues.customerIds.length > 0) {
+    printInfo(`  Known bad customers: ${invoiceKnowledge.badValues.customerIds.slice(-3).join(', ')}`);
   }
-
-  if (!glAccountNo) {
-    printError('No GL account specified. Use "create invoice gl account 4000" or "set default account 4000"');
-    return;
+  if (invoiceKnowledge.badValues.glAccountNos.length > 0) {
+    printInfo(`  Known bad GL accounts: ${invoiceKnowledge.badValues.glAccountNos.slice(-3).join(', ')}`);
   }
-
-  const currency = defaults.currency || 'USD';
-
-  printInfo(`Customer: ${customerId}`);
-  printInfo(`GL Account: ${glAccountNo}`);
-  printInfo(`Amount: ${formatCurrency(amount)}`);
-  printInfo(`Currency: ${currency}`);
   console.log();
 
   const count = cmd.count || 1;
-  const createdInvoices: Array<{ recordNo: string; recordId?: string; amount: number }> = [];
-  const failures: Array<{ error: string }> = [];
+  const createdInvoices: Array<{ recordNo: string; recordId?: string; amount: number; attempts: number }> = [];
+  const failures: Array<{ error: string; attempts: number }> = [];
 
   for (let i = 0; i < count; i++) {
-    printInfo(`Creating invoice ${i + 1} of ${count}...`);
+    printInfo(`${chalk.bold(`Invoice ${i + 1} of ${count}`)}`);
+    console.log();
 
-    const result = await createInvoice(client, {
-      customerId,
-      baseCurrency: currency,
-      currency: currency,
-      lineItems: [{
+    // Use the learning wrapper
+    const result = await createInvoiceWithLearning(
+      client,
+      {
+        customerId,
         glAccountNo,
         amount,
-        memo: `Invoice created by Sage Agent`,
-      }],
-      description: `Test invoice ${i + 1} created by Sage Agent`,
-    });
+        currency,
+        description: `Test invoice ${i + 1} created by Sage Agent`,
+      },
+      (attempt: LearningAttempt) => {
+        // Called after each attempt
+        if (attempt.success) {
+          console.log(chalk.green(`  Attempt ${attempt.attemptNumber}: ✓ Success`));
+        } else {
+          console.log(chalk.yellow(`  Attempt ${attempt.attemptNumber}: ✗ Failed`));
+          console.log(chalk.gray(`    Error: ${describeErrorType(attempt.errorType!)}`));
+          if (attempt.recovery) {
+            console.log(chalk.blue(`    Recovery: ${attempt.recovery}`));
+          }
+        }
+      }
+    );
+
+    console.log();
 
     if (result.success) {
       printSuccess(`Created invoice: Record #${result.recordNo}`);
@@ -350,33 +376,29 @@ async function handleCreateInvoice(
         recordNo: result.recordNo || 'unknown',
         recordId: result.recordId,
         amount,
+        attempts: result.attempts.length,
       });
 
-      // Record successful combination
+      // Also record in the old memory store for backwards compatibility
+      const lastAttempt = result.attempts[result.attempts.length - 1];
       await memory.recordSuccess({
-        customerId,
-        glAccountNo,
+        customerId: lastAttempt.input.customerId!,
+        glAccountNo: lastAttempt.input.glAccountNo,
       });
     } else {
-      // Format Sage errors nicely
-      const errorMessage = result.rawResponse?.error 
-        ? formatSageErrors(result.rawResponse.error)
-        : result.error || 'Unknown error';
+      printError(`Failed after ${result.attempts.length} attempts`);
+      console.log(chalk.red(result.finalError || 'Unknown error'));
       
-      printError('Failed to create invoice:');
-      console.log();
-      console.log(chalk.red(errorMessage));
-      console.log();
-      
-      failures.push({ error: errorMessage });
-
-      // Record failed combination
-      await memory.recordFailure({ customerId, glAccountNo }, errorMessage);
+      failures.push({ 
+        error: result.finalError || 'Unknown error',
+        attempts: result.attempts.length,
+      });
     }
+
+    console.log();
   }
 
   // Summary
-  console.log();
   printHeader('Summary');
   printInfo(`Created: ${createdInvoices.length}`);
   printInfo(`Failed: ${failures.length}`);
@@ -384,21 +406,39 @@ async function handleCreateInvoice(
   if (createdInvoices.length > 0) {
     console.log();
     const columns = [
-      { key: 'recordNo', header: 'Record #', width: 15 },
-      { key: 'recordId', header: 'Invoice ID', width: 20 },
+      { key: 'recordNo', header: 'Record #', width: 15, format: formatRaw },
+      { key: 'recordId', header: 'Invoice ID', width: 20, format: formatRaw },
       { key: 'amount', header: 'Amount', width: 12, format: formatCurrency },
+      { key: 'attempts', header: 'Attempts', width: 10 },
     ];
     console.log(createTable(createdInvoices as unknown as Record<string, unknown>[], columns));
+  }
+
+  // Show updated knowledge
+  const updatedKnowledge = await knowledge.getActionKnowledge('invoice');
+  if (updatedKnowledge.workingDefaults.customerId || updatedKnowledge.workingDefaults.glAccountNo) {
+    console.log();
+    printInfo(chalk.bold('Learned working defaults:'));
+    if (updatedKnowledge.workingDefaults.customerId) {
+      printInfo(`  Customer: ${updatedKnowledge.workingDefaults.customerId}`);
+    }
+    if (updatedKnowledge.workingDefaults.glAccountNo) {
+      printInfo(`  GL Account: ${updatedKnowledge.workingDefaults.glAccountNo}`);
+    }
+    if (updatedKnowledge.workingDefaults.currency) {
+      printInfo(`  Currency: ${updatedKnowledge.workingDefaults.currency}`);
+    }
   }
 }
 
 async function handleShowDefaults(memory: MemoryStore): Promise<void> {
-  printHeader('Current Defaults & Memory');
+  printHeader('Current Defaults & Learned Knowledge');
   
   const defaults = await memory.getDefaults();
-  const memoryState = await memory.getMemory();
+  const knowledge = getKnowledgeStore();
+  const invoiceKnowledge = await knowledge.getActionKnowledge('invoice');
 
-  console.log(chalk.bold('Defaults:'));
+  console.log(chalk.bold('📋 Manual Defaults (from data/defaults.json):'));
   printKeyValues({
     'Customer ID': defaults.customerId || chalk.gray('(not set)'),
     'GL Account': defaults.glAccountNo || chalk.gray('(not set)'),
@@ -409,22 +449,55 @@ async function handleShowDefaults(memory: MemoryStore): Promise<void> {
   });
 
   console.log();
-  console.log(chalk.bold('Learned Combinations:'));
-  if (memoryState.workingCombos.length === 0) {
-    printInfo('No successful combinations learned yet');
+  console.log(chalk.bold('Learned Working Defaults (from successful invoices):'));
+  const learned = invoiceKnowledge.workingDefaults;
+  if (Object.values(learned).every(v => !v)) {
+    printInfo('No working defaults learned yet');
   } else {
-    for (const combo of memoryState.workingCombos.slice(0, 5)) {
-      console.log(`  ${chalk.green('✓')} Customer: ${combo.customerId}, GL: ${combo.glAccountNo || combo.accountLabel || '-'} (${combo.successCount} successes)`);
+    printKeyValues({
+      'Customer ID': learned.customerId || chalk.gray('(not learned)'),
+      'GL Account': learned.glAccountNo?.toString() || chalk.gray('(not learned)'),
+      'Currency': learned.currency || chalk.gray('(not learned)'),
+      'Location ID': learned.locationId?.toString() || chalk.gray('(not learned)'),
+      'Department ID': learned.departmentId?.toString() || chalk.gray('(not learned)'),
+    });
+  }
+
+  console.log();
+  console.log(chalk.bold(' Known Bad Values (will be avoided):'));
+  const bad = invoiceKnowledge.badValues;
+  const hasBadValues = bad.customerIds.length > 0 || bad.glAccountNos.length > 0 || 
+                       bad.locationIds.length > 0 || bad.departmentIds.length > 0;
+  if (!hasBadValues) {
+    printInfo('No bad values recorded yet');
+  } else {
+    if (bad.customerIds.length > 0) {
+      console.log(`  ${chalk.red('Customers:')} ${bad.customerIds.join(', ')}`);
+    }
+    if (bad.glAccountNos.length > 0) {
+      console.log(`  ${chalk.red('GL Accounts:')} ${bad.glAccountNos.join(', ')}`);
+    }
+    if (bad.locationIds.length > 0) {
+      console.log(`  ${chalk.red('Locations:')} ${bad.locationIds.join(', ')}`);
+    }
+    if (bad.departmentIds.length > 0) {
+      console.log(`  ${chalk.red('Departments:')} ${bad.departmentIds.join(', ')}`);
     }
   }
 
   console.log();
-  console.log(chalk.bold('Recent Failures:'));
-  if (memoryState.failedCombos.length === 0) {
-    printInfo('No failures recorded');
+  console.log(chalk.bold('Successful Invoice Combinations:'));
+  if (invoiceKnowledge.successfulCombos.length === 0) {
+    printInfo('No successful combinations recorded yet');
   } else {
-    for (const fail of memoryState.failedCombos.slice(-3)) {
-      console.log(`  ${chalk.red('✗')} Customer: ${fail.combo.customerId}, Error: ${fail.error.substring(0, 50)}...`);
+    for (const combo of invoiceKnowledge.successfulCombos.slice(-5)) {
+      const parts = [];
+      if (combo.customerId) parts.push(`Customer: ${combo.customerId}`);
+      if (combo.glAccountNo) parts.push(`GL: ${combo.glAccountNo}`);
+      if (combo.departmentId) parts.push(`Dept: ${combo.departmentId}`);
+      if (combo.locationId) parts.push(`Loc: ${combo.locationId}`);
+      const dateStr = new Date(combo.createdAt).toLocaleDateString();
+      console.log(`  ${chalk.green('✓')} ${parts.join(', ')} (${dateStr})`);
     }
   }
 }
@@ -454,6 +527,17 @@ async function handleSetDefault(memory: MemoryStore, options: Record<string, str
 
   await memory.setDefaults(updates);
   printSuccess('Defaults saved');
+}
+
+async function handleResetKnowledge(): Promise<void> {
+  printHeader('Resetting Learned Knowledge');
+
+  const knowledge = getKnowledgeStore();
+  await knowledge.clear();
+  
+  printSuccess('Knowledge has been reset!');
+  printInfo('The agent will now start fresh and re-learn working combinations.');
+  printInfo('Run "create invoice" to begin the learning process.');
 }
 
 function handleStatus(client: SageClient): void {
@@ -495,11 +579,12 @@ function showHelp(): void {
   console.log('  create invoice customer CUST-001 gl account 4000 $100');
   console.log();
 
-  console.log(chalk.bold('Defaults & Memory:'));
-  console.log('  show defaults                Show current defaults and learned combos');
+  console.log(chalk.bold('Defaults & Learning:'));
+  console.log('  show defaults                Show current defaults and learned knowledge');
   console.log('  set default customer X       Set default customer ID');
   console.log('  set default account 4000     Set default GL account');
   console.log('  set default amount 100       Set default invoice amount');
+  console.log('  reset knowledge              Clear all learned knowledge (start fresh)');
   console.log();
 
   console.log(chalk.bold('Examples:'));
@@ -544,6 +629,11 @@ async function main(): Promise<void> {
 
   if (cmd.action === 'set-default') {
     await handleSetDefault(memory, cmd.options);
+    return;
+  }
+
+  if (cmd.action === 'reset-knowledge') {
+    await handleResetKnowledge();
     return;
   }
 
