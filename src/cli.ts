@@ -6,7 +6,8 @@ import {
   getInvoice, 
   queryInvoiceById, 
   listOpenInvoices, 
-  Invoice 
+  Invoice,
+  InvoiceResult
 } from './sage/actions/invoice.js';
 import { listCustomers, getCustomer, Customer } from './sage/actions/listCustomers.js';
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
@@ -41,6 +42,7 @@ interface ParsedCommand {
   amount?: number;
   glAccount?: string;
   recordNo?: string;
+  invoiceId?: string;  // e.g., INV25948
   options: Record<string, string>;
 }
 
@@ -89,10 +91,16 @@ function parseCommand(input: string): ParsedCommand {
   if (lower.includes('get') || lower.includes('fetch') || lower.includes('read')) {
     if (lower.includes('invoice')) {
       command.action = 'get-invoice';
-      // Extract record number
-      const match = lower.match(/(?:invoice|#|recordno|record)\s*(\d+)/i);
-      if (match) {
-        command.recordNo = match[1];
+      // Extract invoice ID (e.g., INV25948) or record number
+      const invoiceIdMatch = input.match(/(?:invoice\s+)?(INV\d+)/i);
+      if (invoiceIdMatch) {
+        command.invoiceId = invoiceIdMatch[1].toUpperCase();
+      } else {
+        // Extract record number
+        const match = lower.match(/(?:invoice|#|recordno|record)\s*(\d+)/i);
+        if (match) {
+          command.recordNo = match[1];
+        }
       }
     } else if (lower.includes('customer')) {
       command.action = 'get-customer';
@@ -277,10 +285,38 @@ async function handleListLabels(client: SageClient): Promise<void> {
   printInfo(`Found ${result.labels.length} label(s)`);
 }
 
-async function handleGetInvoice(client: SageClient, recordNo: string): Promise<void> {
-  printHeader(`Invoice #${recordNo}`);
+async function handleGetInvoice(
+  client: SageClient, 
+  options: { recordNo?: string; invoiceId?: string }
+): Promise<void> {
+  const identifier = options.invoiceId || options.recordNo;
+  printHeader(`Invoice Details`);
   
-  const result = await getInvoice(client, recordNo);
+  if (!identifier) {
+    printError('Please specify an invoice ID (e.g., INV25948) or record number');
+    return;
+  }
+
+  let result: InvoiceResult;
+  
+  if (options.invoiceId) {
+    // First, query by Invoice ID to get the record number
+    printInfo(`Looking up Invoice ID: ${options.invoiceId}`);
+    const queryResult = await queryInvoiceById(client, options.invoiceId);
+    
+    if (!queryResult.success || !queryResult.invoice) {
+      printError(queryResult.error || `Invoice ${options.invoiceId} not found`);
+      return;
+    }
+    
+    // Now fetch the full record details
+    const recordNo = queryResult.invoice.RECORDNO;
+    printInfo(`Fetching full details for Record No: ${recordNo}`);
+    result = await getInvoice(client, recordNo);
+  } else {
+    printInfo(`Fetching invoice by Record No: ${options.recordNo}`);
+    result = await getInvoice(client, options.recordNo!);
+  }
   
   if (!result.success) {
     printError(result.error || 'Failed to get invoice');
@@ -288,20 +324,201 @@ async function handleGetInvoice(client: SageClient, recordNo: string): Promise<v
   }
 
   const invoice = result.invoice!;
-  printSuccess('Invoice found');
+  
+  // Status styling
+  const stateColor = invoice.STATE === 'Paid' ? chalk.green :
+                     invoice.STATE === 'Posted' ? chalk.blue :
+                     invoice.STATE === 'Submitted' ? chalk.yellow :
+                     invoice.RAWSTATE === 'D' ? chalk.gray : chalk.white;
+
+  // Calculate amounts
+  const amountEntered = Number(invoice.TRX_TOTALENTERED || invoice.TOTALENTERED || 0);
+  const amountPaid = Number(invoice.TRX_TOTALPAID || invoice.TOTALPAID || 0);
+  const amountDue = Number(invoice.TRX_TOTALDUE || invoice.TOTALDUE || 0);
+  const currency = invoice.CURRENCY || invoice.BASECURR || 'USD';
+
+  // Calculate due in days
+  // Sage returns DUE_IN_DAYS as negative when due in future, positive when overdue
+  let dueInDaysDisplay: string;
+  const apiDueInDays = invoice.DUE_IN_DAYS ? parseInt(String(invoice.DUE_IN_DAYS)) : null;
+  
+  if (apiDueInDays !== null && !isNaN(apiDueInDays)) {
+    // API value: negative = due in future, positive = overdue
+    if (apiDueInDays < 0) {
+      dueInDaysDisplay = `${Math.abs(apiDueInDays)} days`;
+    } else if (apiDueInDays === 0) {
+      dueInDaysDisplay = 'Today';
+    } else {
+      dueInDaysDisplay = `${apiDueInDays} days overdue`;
+    }
+  } else if (invoice.WHENDUE) {
+    // Fallback: calculate from due date
+    let dueDateParts: number[];
+    if (invoice.WHENDUE.includes('/')) {
+      const [month, day, year] = invoice.WHENDUE.split('/').map(Number);
+      dueDateParts = [year, month - 1, day];
+    } else {
+      const [year, month, day] = invoice.WHENDUE.split('-').map(Number);
+      dueDateParts = [year, month - 1, day];
+    }
+    
+    const dueDate = new Date(dueDateParts[0], dueDateParts[1], dueDateParts[2]);
+    const today = new Date();
+    const dueDateOnly = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+    const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    
+    const diffTime = dueDateOnly.getTime() - todayOnly.getTime();
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    dueInDaysDisplay = diffDays > 0 ? `${diffDays} days` : diffDays === 0 ? 'Today' : `${Math.abs(diffDays)} days overdue`;
+  } else {
+    dueInDaysDisplay = '-';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Header with key metrics (like the UI top bar)
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log();
+  console.log(chalk.bold(`Invoice -- ${invoice.RECORDID || 'N/A'}`));
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log();
+  
+  // Quick stats row (mimics the UI header)
+  const statsTable = [
+    ['Invoice date', 'Due date', 'Due in', 'Invoice total', 'Amount paid', 'Amount due', 'State'],
+    [
+      invoice.WHENCREATED || '-',
+      invoice.WHENDUE || '-',
+      dueInDaysDisplay,
+      `${formatCurrency(amountEntered)} ${currency}`,
+      `${formatCurrency(amountPaid)} ${currency}`,
+      `${formatCurrency(amountDue)} ${currency}`,
+      invoice.STATE || invoice.RAWSTATE || '-'
+    ]
+  ];
+  console.log(chalk.gray(statsTable[0].join('  |  ')));
+  console.log(statsTable[1].map((v, i) => 
+    i === 6 ? stateColor(v) : 
+    i === 5 && amountDue > 0 ? chalk.red(v) : 
+    i === 4 && amountPaid > 0 ? chalk.green(v) : v
+  ).join('  |  '));
+  console.log();
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Transaction Details
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log(chalk.bold.cyan('Transaction'));
+  console.log();
+  
+  const billTo = invoice.BILLTO || invoice.CONTACT;
+  const shipTo = invoice.SHIPTO;
+  
   printKeyValues({
-    'Record No': invoice.RECORDNO,
-    'Invoice ID': invoice.RECORDID,
-    'Customer': `${invoice.CUSTOMERID} (${invoice.CUSTOMERNAME || 'N/A'})`,
-    'Amount': formatCurrency(invoice.TRX_TOTALENTERED),
-    'Paid': formatCurrency(invoice.TRX_TOTALPAID),
-    'Due': formatCurrency(invoice.TRX_TOTALDUE),
-    'Status': invoice.STATE,
-    'Created': invoice.WHENCREATED,
-    'Due Date': invoice.WHENDUE,
-    'Description': invoice.DESCRIPTION || '-',
-    'Currency': invoice.CURRENCY || 'USD',
+    'Date': invoice.WHENCREATED || '-',
+    'GL posting date': invoice.WHENPOSTED || '-',
+    'Customer': `${invoice.CUSTOMERID}--${invoice.CUSTOMERNAME || ''}`,
+    'Bill to': invoice.BILLTOCONTACTNAME || billTo?.CONTACTNAME || '-',
+    'Ship to': invoice.SHIPTOCONTACTNAME || shipTo?.CONTACTNAME || '-',
   });
+
+  // Contact details
+  if (billTo?.EMAIL1 || billTo?.PHONE1) {
+    console.log();
+    printKeyValues({
+      'Email': billTo?.EMAIL1 || '-',
+      'Phone': billTo?.PHONE1 || '-',
+    });
+  }
+
+  console.log();
+  printKeyValues({
+    'State': stateColor(invoice.STATE || invoice.RAWSTATE || '-'),
+    'Invoice number': chalk.bold(invoice.RECORDID || '-'),
+    'Reference number': invoice.DOCNUMBER || '-',
+    'Description': invoice.DESCRIPTION || '-',
+  });
+
+  if (invoice.DESCRIPTION2) {
+    printKeyValues({ 'Message': invoice.DESCRIPTION2 });
+  }
+
+  console.log();
+  printKeyValues({
+    'When modified': invoice.WHENMODIFIED || '-',
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Terms & Dates
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log();
+  console.log(chalk.bold.cyan('Terms & Dates'));
+  console.log();
+  printKeyValues({
+    'Term': invoice.TERMNAME || '-',
+    'Due date': invoice.WHENDUE || '-',
+    'Paid date': invoice.WHENPAID || '-',
+    'Discount date': invoice.WHENDISCOUNT || '-',
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Integration / Custom Fields
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasIntegrationFields = invoice.TOKEN_345 || invoice.PAYSTAND_UUID || 
+                               invoice.EXTERNALREFNO || invoice.EXTERNALURL || 
+                               invoice.SUPDOCID;
+  if (hasIntegrationFields) {
+    console.log();
+    console.log(chalk.bold.cyan('Integration'));
+    console.log();
+    printKeyValues({
+      'Token': invoice.TOKEN_345 || '-',
+      'PAYSTAND_UUID': invoice.PAYSTAND_UUID || '-',
+      'External Ref': invoice.EXTERNALREFNO || '-',
+      'Attachment': invoice.SUPDOCID || '-',
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Line Items
+  // ═══════════════════════════════════════════════════════════════════════════
+  const lineItems = invoice.ARINVOICEITEMS?.arinvoiceitem;
+  if (lineItems) {
+    const items = Array.isArray(lineItems) ? lineItems : [lineItems];
+    console.log();
+    console.log(chalk.bold.cyan(`Line Items (${items.length})`));
+    console.log();
+    
+    const lineColumns = [
+      { key: 'LINE_NO', header: '#', width: 4 },
+      { key: 'ACCOUNTNO', header: 'GL Account', width: 12, format: formatRaw },
+      { key: 'ACCOUNTTITLE', header: 'Account Name', width: 20 },
+      { key: 'TRX_AMOUNT', header: 'Amount', width: 12, align: 'right' as const, format: formatCurrency },
+      { key: 'ENTRYDESCRIPTION', header: 'Description', width: 25 },
+      { key: 'LOCATIONID', header: 'Location', width: 10 },
+      { key: 'DEPARTMENTID', header: 'Dept', width: 8 },
+    ];
+    
+    console.log(createTable(items as unknown as Record<string, unknown>[], lineColumns));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Entity (if multi-entity)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (invoice.MEGAENTITYNAME) {
+    console.log();
+    console.log(chalk.bold.cyan('Entity'));
+    console.log();
+    printKeyValues({
+      'Entity': `${invoice.MEGAENTITYID} - ${invoice.MEGAENTITYNAME}`,
+      'Batch': invoice.PRBATCH || '-',
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Audit Info
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log();
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log(chalk.gray(`Record No: ${invoice.RECORDNO} | Created by: ${invoice.CREATEDBYLOGINID || '-'} | Modified by: ${invoice.MODIFIEDBYLOGINID || '-'}`));
 }
 
 async function handleCreateInvoice(
@@ -370,11 +587,20 @@ async function handleCreateInvoice(
 
     console.log();
 
-    if (result.success) {
-      printSuccess(`Created invoice: Record #${result.recordNo}`);
+    if (result.success && result.recordNo) {
+      // Fetch the full invoice to get the Invoice ID
+      printInfo(`Fetching invoice details...`);
+      const invoiceDetails = await getInvoice(client, result.recordNo);
+      
+      const invoiceId = invoiceDetails.success && invoiceDetails.invoice 
+        ? invoiceDetails.invoice.RECORDID 
+        : undefined;
+      
+      printSuccess(`Created invoice: ${invoiceId || 'Record #' + result.recordNo}`);
+      
       createdInvoices.push({
-        recordNo: result.recordNo || 'unknown',
-        recordId: result.recordId,
+        recordNo: result.recordNo,
+        recordId: invoiceId,
         amount,
         attempts: result.attempts.length,
       });
@@ -385,7 +611,7 @@ async function handleCreateInvoice(
         customerId: lastAttempt.input.customerId!,
         glAccountNo: lastAttempt.input.glAccountNo,
       });
-    } else {
+    } else if (!result.success) {
       printError(`Failed after ${result.attempts.length} attempts`);
       console.log(chalk.red(result.finalError || 'Unknown error'));
       
@@ -568,7 +794,8 @@ function showHelp(): void {
   console.log();
 
   console.log(chalk.bold('Get Specific Records:'));
-  console.log('  get invoice 12345            Get invoice by record number');
+  console.log('  get invoice INV25948         Get invoice by Invoice ID');
+  console.log('  get invoice 54284            Get invoice by record number');
   console.log('  get customer CUST-001        Get customer by ID');
   console.log();
 
@@ -676,11 +903,13 @@ async function main(): Promise<void> {
       break;
 
     case 'get-invoice':
-      if (!cmd.recordNo) {
-        printError('Please specify an invoice record number: get invoice 12345');
+      if (!cmd.recordNo && !cmd.invoiceId) {
+        printError('Please specify an invoice ID or record number:');
+        printInfo('  get invoice INV25948    (by Invoice ID)');
+        printInfo('  get invoice 54284       (by Record Number)');
         return;
       }
-      await handleGetInvoice(client, cmd.recordNo);
+      await handleGetInvoice(client, { recordNo: cmd.recordNo, invoiceId: cmd.invoiceId });
       break;
 
     case 'create-invoice':

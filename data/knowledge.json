@@ -55,6 +55,46 @@
         "locationId": 110,
         "departmentId": 100,
         "createdAt": "2026-05-18T22:09:42.146Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:13:16.837Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:15:59.896Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:16:26.058Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T22:19:26.966Z"
+      },
+      {
+        "customerId": "10776",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-18T23:15:37.659Z"
       }
     ]
   },
@@ -68,5 +108,5 @@
     },
     "successfulCombos": []
   },
-  "lastUpdated": "2026-05-18T22:09:42.146Z"
+  "lastUpdated": "2026-05-18T23:15:37.659Z"
 }

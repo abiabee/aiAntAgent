@@ -14,22 +14,125 @@ import {
 } from '../templates/invoice.js';
 import { extractData, ensureArray, SageResponse } from '../parser.js';
 
+export interface InvoiceLineItemData {
+  RECORDNO: string;
+  ACCOUNTNO: string;
+  ACCOUNTTITLE?: string;
+  AMOUNT: number;
+  TRX_AMOUNT: number;
+  ENTRYDESCRIPTION?: string;
+  LOCATIONID?: string;
+  LOCATIONNAME?: string;
+  DEPARTMENTID?: string;
+  DEPARTMENTNAME?: string;
+  LINE_NO?: number;
+  STATE?: string;
+}
+
+export interface InvoiceContact {
+  CONTACTNAME?: string;
+  COMPANYNAME?: string;
+  EMAIL1?: string;
+  PHONE1?: string;
+  MAILADDRESS?: {
+    ADDRESS1?: string;
+    CITY?: string;
+    STATE?: string;
+    ZIP?: string;
+    COUNTRY?: string;
+  };
+}
+
 export interface Invoice {
+  // Core identifiers
   RECORDNO: string;
   RECORDID: string;
+  RECORDTYPE?: string;
+  DOCNUMBER?: string;         // Reference number
+  
+  // Customer info
   CUSTOMERID: string;
   CUSTOMERNAME?: string;
+  CUSTOMERRECORDNO?: string;
+  
+  // Amounts (base currency)
   TOTALENTERED?: number;
   TOTALPAID?: number;
   TOTALDUE?: number;
+  TOTALSELECTED?: number;
+  
+  // Amounts (transaction currency)
   TRX_TOTALENTERED?: number;
   TRX_TOTALPAID?: number;
   TRX_TOTALDUE?: number;
-  STATE?: string;
+  TRX_TOTALSELECTED?: number;
+  TRX_TOTALDISCOUNTAPPLIED?: number;
+  
+  // Status
+  STATE?: string;      // e.g., "Paid", "Submitted", "Posted", "Draft"
+  RAWSTATE?: string;   // e.g., "P", "S", "D"
+  
+  // Currency
   CURRENCY?: string;
+  BASECURR?: string;
+  
+  // Dates
   WHENCREATED?: string;
   WHENDUE?: string;
+  WHENPAID?: string;
+  WHENPOSTED?: string;
+  WHENDISCOUNT?: string;
+  WHENMODIFIED?: string;
+  AUWHENCREATED?: string;    // Audit timestamp
+  DUE_IN_DAYS?: string;
+  
+  // Description & notes
   DESCRIPTION?: string;
+  DESCRIPTION2?: string;
+  
+  // Terms
+  TERMNAME?: string;
+  TERMKEY?: string;
+  TERMVALUE?: string;
+  
+  // Entity/Location
+  MEGAENTITYID?: string;
+  MEGAENTITYNAME?: string;
+  MEGAENTITYKEY?: string;
+  
+  // Contacts
+  BILLTOCONTACTNAME?: string;
+  SHIPTOCONTACTNAME?: string;
+  BILLTOPAYTOCONTACTNAME?: string;
+  SHIPTORETURNTOCONTACTNAME?: string;
+  CONTACT?: InvoiceContact;
+  BILLTO?: InvoiceContact;
+  SHIPTO?: InvoiceContact;
+  
+  // Batch info
+  PRBATCH?: string;
+  PRBATCHKEY?: string;
+  
+  // Delivery
+  DELIVERY_OPTIONS?: string;
+  
+  // Custom fields / integrations
+  SUPDOCID?: string;          // Attachment ID
+  TOKEN_345?: string;         // Token field
+  PAYSTAND_UUID?: string;     // Paystand UUID
+  EXTERNALREFNO?: string;     // External reference
+  EXTERNALURL?: string;       // External URL
+  
+  // Line items
+  ARINVOICEITEMS?: {
+    arinvoiceitem?: InvoiceLineItemData | InvoiceLineItemData[];
+  };
+  
+  // Audit
+  CREATEDBY?: string;
+  MODIFIEDBY?: string;
+  CREATEDBYLOGINID?: string;
+  MODIFIEDBYLOGINID?: string;
 }
 
 export interface InvoiceResult {
