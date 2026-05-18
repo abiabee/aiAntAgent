@@ -1,8 +1,32 @@
-
-# Playwright
+# Dependencies
 node_modules/
-/test-results/
-/playwright-report/
-/blob-report/
-/playwright/.cache/
-/playwright/.auth/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.local
+
+# Output files (keep structure, ignore contents)
+outputs/xml/*.xml
+outputs/screenshots/*.png
+outputs/screenshots/*.jpg
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Keep data structure but not learned memory
+data/memory.json
+!data/defaults.json

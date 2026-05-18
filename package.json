@@ -1,10 +1,32 @@
 {
+  "name": "sage-intacct-agent",
+  "version": "1.0.0",
+  "description": "Sage Intacct action agent - create/pay/query invoices via natural language",
+  "main": "dist/cli.js",
+  "type": "module",
   "engines": {
     "node": "18.20.4"
   },
-  "devDependencies": {
-    "@playwright/test": "^1.60.0",
-    "@types/node": "^25.9.0"
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "agent": "npx tsx src/cli.ts",
+    "dev": "npx tsx watch src/cli.ts"
   },
-  "scripts": {}
+  "dependencies": {
+    "axios": "^1.7.9",
+    "chalk": "^5.4.1",
+    "cli-table3": "^0.6.5",
+    "dotenv": "^16.4.7",
+    "fast-xml-parser": "^4.5.1",
+    "handlebars": "^4.7.8",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.5",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
 }

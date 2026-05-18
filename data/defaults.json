@@ -1,0 +1,10 @@
+{
+  "customerId": null,
+  "glAccountNo": null,
+  "accountLabel": null,
+  "locationId": null,
+  "departmentId": null,
+  "currency": "USD",
+  "termName": null,
+  "defaultAmount": 100
+}
