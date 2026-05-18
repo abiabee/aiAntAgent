@@ -1,0 +1,213 @@
+# **Sage Intacct action agent**:
+
+> “I tell it what Sage object/action I want, and it creates/updates/pays/reverses records, returns the XML request/response, extracts key fields, and learns which sandbox combinations work.”
+
+Basically, I want to generate an agent that learns to do basic SageIntacct ERP actions such as "create invoice", "pay invoice", etc.
+
+So I should be able to add different requests, like "generate 5 invoices". The goal is for me to 1. give it my sageintacct sandbox credentials, then the bot generates the objects that I ask.
+The bot returns the information cleanly displayed.
+This is for testing purposes, so I should be given the "recordno", for example, or the "amount". 
+
+Flows can turn as complex as "create an invoice" and "pay said invoice". The bot should be able to learn what "patterns" or "defaults" do work, so, for example, if it finds an error in the request, it shall try with another and save the "these combinations work" as knowledge.
+
+
+
+## Start here
+
+Build it in 3 layers:
+
+```text
+User command
+  ↓
+Sage Agent Planner
+  ↓
+Sage Action Tools
+  ↓
+Sage API XML
+  ↓
+Result table + XML + learned rules
+```
+
+Example command:
+
+```text
+Create 5 invoices
+```
+
+Agent does:
+
+```text
+1. Choose default customer
+2. Choose valid AR account
+3. Choose valid GL account
+4. Build invoice XML
+5. Send to Sage
+6. Parse response
+7. Return table
+8. Save successful configuration
+```
+
+Output:
+
+| Invoice | Record No | Customer |  Amount | Status  |
+| ------- | --------: | -------- | ------: | ------- |
+| INV-001 |     13822 | CUST-001 | $100.00 | Created |
+| INV-002 |     13823 | CUST-001 | $100.00 | Created |
+
+Then show:
+
+```xml
+<create>
+  <ARINVOICE>...</ARINVOICE>
+</create>
+```
+
+## The key concept
+
+The agent should not “know everything” at first.
+
+It should have **tools**:
+
+```ts
+createInvoice(input)
+getCustomer(customerId)
+listCustomers()
+listGlAccounts()
+createPayment(input)
+applyCreditMemo(input)
+reversePayment(input)
+getInvoice(recordNo)
+```
+
+Then the agent chooses which tool to call.
+
+## First MVP
+
+Do not start with payments.
+
+Start with:
+
+```text
+"Create 1 default invoice"
+```
+
+Your first version should:
+
+1. Build hardcoded default invoice XML
+2. Send it to Sage Intacct sandbox
+3. Parse response
+4. Return:
+
+   * XML request
+   * XML response
+   * `recordno`
+   * customer
+   * amount
+   * invoice number
+
+That alone is powerful.
+
+## Then upgrade to
+
+```text
+"Create 5 invoices"
+```
+
+The agent loops 5 times and returns a table.
+
+## Then add “memory”
+
+Store successful combinations:
+
+```json
+{
+  "working_invoice_defaults": {
+    "customerid": "CUST-001",
+    "araccount": "1200",
+    "glaccount": "4000",
+    "locationid": "E-001",
+    "departmentid": "D-001"
+  }
+}
+```
+
+When Sage errors like:
+
+```text
+GLACCOUNTNO is not related to LOCATIONID
+```
+
+The agent should:
+
+1. Read the error
+2. Try another known GL account/location combo
+3. Save the successful combo
+4. Retry automatically
+
+Call this **sandbox rule learning**, not “bypassing rules.”
+
+## Suggested architecture
+
+```text
+sage-agent/
+  src/
+    agent/
+      planner.ts
+      memory.ts
+    sage/
+      client.ts
+      xmlBuilder.ts
+      xmlParser.ts
+      actions/
+        createInvoice.ts
+        createPayment.ts
+        getInvoice.ts
+        listCustomers.ts
+        listGlAccounts.ts
+    cli.ts
+  data/
+    memory.json
+    defaults.json
+  outputs/
+    requests/
+    responses/
+```
+
+## What to study first
+
+In this order:
+
+1. **Sage Intacct XML API basics**
+
+   * request structure
+   * authentication
+   * `create`
+   * `read`
+   * `query`
+   * `ARINVOICE`
+   * payments later
+
+2. **XML building/parsing in Node.js**
+
+   * `xmlbuilder2`
+   * `fast-xml-parser`
+
+3. **Command-line app**
+   So you can run:
+
+```bash
+npm run sage-agent "create 5 invoices"
+```
+
+4. **LLM function calling / tool calling**
+   This is how the “agent” decides:
+
+```text
+User wants invoices → call createInvoice 5 times
+User wants payment → call createPayment
+User wants credits → call createCreditMemo/applyCredit
+```
+
+5. **Retry logic**
+   This is where it gets smart.
+
