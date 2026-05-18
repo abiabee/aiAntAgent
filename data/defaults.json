@@ -1,10 +1,10 @@
 {
-  "customerId": "10776",
+  "customerId": "10001",
   "glAccountNo": "10100",
   "accountLabel": null,
   "locationId": 700,
   "departmentId": null,
   "currency": "USD",
   "termName": null,
-  "defaultAmount": 100
+  "defaultAmount": 132.67
 }
