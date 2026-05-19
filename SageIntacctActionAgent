@@ -211,3 +211,236 @@ User wants credits → call createCreditMemo/applyCredit
 5. **Retry logic**
    This is where it gets smart.
 
+
+# UI playwright combination
+
+```text
+Natural language command
+  ↓
+Agent planner
+  ↓
+Sage XML/API tools + Dashboard UI tools
+  ↓
+Unified result
+```
+
+Think of it like this:
+
+## 1. API/CLI tool = creates and reads Sage records
+
+Good for:
+
+```text
+create invoice
+pay invoice
+read invoice by recordno
+query customers
+query GL accounts
+get raw XML request/response
+```
+
+Example:
+
+```ts
+createInvoice({ customerId, amount })
+getInvoice({ recordNo })
+createPayment({ invoiceRecordNo, amount })
+```
+
+## 2. UI/browser tool = verifies what humans actually see
+
+Use Playwright for:
+
+```text
+open Paystand dashboard
+search invoice
+read visible status
+read displayed amount
+read customer name
+take screenshot
+click sync/import/pay buttons
+verify UI state
+```
+
+Example:
+
+```ts
+findInvoiceInDashboard(invoiceNumber)
+readDashboardInvoiceDetails(invoiceNumber)
+takeInvoiceScreenshot(invoiceNumber)
+```
+
+## Combined flow example
+
+User says:
+
+```text
+Create 5 invoices and show me how they appear in the dashboard
+```
+
+Agent does:
+
+```text
+1. CLI/API creates 5 invoices in Sage
+2. CLI/API stores request XML + response XML
+3. Agent extracts recordno, doc number, amount, customer
+4. Playwright opens dashboard
+5. Searches each invoice
+6. Reads displayed invoice data
+7. Takes screenshots
+8. Returns comparison table
+```
+
+Output:
+
+| Invoice  | Sage Record No | Sage Amount | Dashboard Amount | Sage Status | Dashboard Status | Match |
+| -------- | -------------: | ----------: | ---------------: | ----------- | ---------------- | ----- |
+| INV-1001 |          88201 |     $100.00 |          $100.00 | Posted      | Open             | ✅     |
+| INV-1002 |          88202 |     $250.00 |          $250.00 | Posted      | Open             | ✅     |
+
+Then below:
+
+```text
+Artifacts:
+- Sage XML request
+- Sage XML response
+- Dashboard screenshot
+- Comparison JSON
+```
+
+## Recommended architecture
+
+```text
+sage-agent/
+  src/
+    agent/
+      planner.ts
+      runner.ts
+      memory.ts
+
+    tools/
+      sageApi/
+        createInvoice.ts
+        createPayment.ts
+        queryInvoice.ts
+        queryCustomers.ts
+
+      dashboardUi/
+        login.ts
+        searchInvoice.ts
+        readInvoiceDetails.ts
+        payInvoice.ts
+        screenshot.ts
+
+    reports/
+      buildComparisonReport.ts
+
+  data/
+    defaults.json
+    memory.json
+
+  outputs/
+    xml/
+    screenshots/
+    reports/
+```
+
+The important idea is: **Playwright is just another tool the agent can call.**
+
+## Example internal tool contract
+
+```ts
+type SageInvoiceResult = {
+  source: "sage-api";
+  invoiceNumber: string;
+  recordNo: string;
+  customerId: string;
+  amount: number;
+  requestXml: string;
+  responseXml: string;
+};
+
+type DashboardInvoiceResult = {
+  source: "dashboard-ui";
+  invoiceNumber: string;
+  visibleCustomer: string;
+  visibleAmount: number;
+  visibleStatus: string;
+  screenshotPath: string;
+};
+```
+
+Then merge them:
+
+```ts
+type InvoiceComparison = {
+  invoiceNumber: string;
+  sage: SageInvoiceResult;
+  dashboard: DashboardInvoiceResult;
+  matches: {
+    amount: boolean;
+    customer: boolean;
+    status: boolean;
+  };
+};
+```
+
+## Agent command examples
+
+Eventually you want commands like:
+
+```text
+create 5 default invoices and verify in dashboard
+```
+
+```text
+create one invoice for customer C-100, import it, and show me dashboard status
+```
+
+```text
+pay these 5 fully and compare Sage vs dashboard
+```
+
+```text
+create invoice, pay with credits, then show me Sage XML and dashboard result
+```
+
+## MVP version
+
+Start with this exact flow:
+
+```text
+create 1 invoice through Sage API
+→ search it in dashboard with Playwright
+→ return Sage data + dashboard data + screenshot
+```
+
+Do **not** start with payments or credits.
+
+Your first useful demo should be:
+
+```bash
+npm run agent "create 1 invoice and verify in dashboard"
+```
+
+And the output should be:
+
+```text
+Created invoice INV-12345
+
+Sage:
+- Record No: 88721
+- Customer: CUST-001
+- Amount: $100.00
+
+Dashboard:
+- Found: yes
+- Customer: Acme Test Customer
+- Amount: $100.00
+- Status: Open
+
+Result: PASS
+Screenshot: outputs/screenshots/INV-12345.png
+```
+
+That is the bridge: **API for action, UI for truth-as-displayed.**
