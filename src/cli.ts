@@ -15,6 +15,8 @@ import type { Customer, CustomerFull, CustomerContact, CustomerAddress, Customer
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { listAllBankAccounts, BankAccount } from './sage/actions/bankAccount.js';
 import { listPayments, getPayment, Payment, PaymentFull, PaymentDetail } from './sage/actions/payment.js';
+import { listArAdjustments, getArAdjustment, queryArAdjustmentById } from './sage/actions/aradjustment.js';
+import type { ArAdjustment } from './sage/actions/aradjustment.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
 import { formatSageErrors } from './sage/parser.js';
 import { createInvoiceWithLearning, LearningAttempt } from './sage/learningInvoice.js';
@@ -55,6 +57,8 @@ interface ParsedCommand {
   paymentRecordNo?: string;
   paymentMethod?: string;
   bankAccountId?: string;
+  adjustmentId?: string;  // e.g., ADJ-001
+  adjustmentRecordNo?: string;
   options: Record<string, string>;
 }
 
@@ -85,8 +89,14 @@ function parseCommand(input: string): ParsedCommand {
 
   // List commands
   if (lower.includes('list') || lower.includes('show')) {
-    if (lower.includes('customer')) {
-      command.action = 'list-customers';
+    // Note: order matters here - check more specific matches first
+    if (lower.includes('adjustment') || lower.includes('advance')) {
+      command.action = 'list-adjustments';
+      // Check for "for customer X" filter
+      const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+      if (customerMatch) {
+        command.customerId = customerMatch[1];
+      }
     } else if (lower.includes('payment')) {
       command.action = 'list-payments';
       // Check for "for customer X" filter
@@ -94,6 +104,8 @@ function parseCommand(input: string): ParsedCommand {
       if (customerMatch) {
         command.customerId = customerMatch[1];
       }
+    } else if (lower.includes('customer')) {
+      command.action = 'list-customers';
     } else if (lower.includes('bank')) {
       command.action = 'list-bank-accounts';
     } else if (lower.includes('invoice')) {
@@ -148,6 +160,27 @@ function parseCommand(input: string): ParsedCommand {
       const match = lower.match(/payment\s*#?\s*(\d+)/i);
       if (match) {
         command.paymentRecordNo = match[1];
+      }
+    } else if (lower.includes('adjustment') || lower.includes('advance')) {
+      command.action = 'get-adjustment';
+      // Check for "for customer X" filter first
+      const forCustomerMatch = input.match(/adjustments?\s+(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+      if (forCustomerMatch) {
+        command.action = 'list-adjustments';
+        command.customerId = forCustomerMatch[1];
+        return command;
+      }
+      // Extract adjustment ID (e.g., ADJ-001 or just alphanumeric)
+      const adjIdMatch = input.match(/(?:adjustment|advance)\s+([A-Za-z0-9_-]+)/i);
+      if (adjIdMatch) {
+        const value = adjIdMatch[1];
+        // If it's purely numeric, it's a RECORDNO
+        if (/^\d+$/.test(value)) {
+          command.adjustmentRecordNo = value;
+        } else {
+          // Otherwise it's a RECORDID (adjustment number)
+          command.adjustmentId = value;
+        }
       }
     } else if (lower.includes('customer')) {
       command.action = 'get-customer';
@@ -438,6 +471,137 @@ async function handleGetMultipleInvoices(client: SageClient, invoiceIds: string[
     console.log();
     printInfo(chalk.yellow(`Not found: ${notFound.join(', ')}`));
   }
+}
+
+// =============================================================================
+// AR Adjustment Handlers
+// =============================================================================
+
+async function handleListAdjustments(client: SageClient, customerId?: string): Promise<void> {
+  const header = customerId 
+    ? `AR Adjustments for Customer ${customerId}` 
+    : 'AR Adjustments';
+  printHeader(header);
+  
+  const result = await listArAdjustments(client, { customerId, pageSize: 50 });
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to list AR adjustments');
+    return;
+  }
+
+  if (result.adjustments.length === 0) {
+    printInfo('No AR adjustments found');
+    return;
+  }
+
+  const columns = [
+    { key: 'RECORDID', header: 'Adjustment ID', width: 15, format: formatRaw },
+    { key: 'RECORDNO', header: 'Record#', width: 10, format: formatRaw },
+    { key: 'CUSTOMERID', header: 'Customer', width: 12, format: formatRaw },
+    { key: 'CUSTOMERNAME', header: 'Customer Name', width: 18 },
+    { key: 'WHENCREATED', header: 'Date', width: 12 },
+    { key: 'TRX_TOTALENTERED', header: 'Amount', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'TRX_TOTALDUE', header: 'Due', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'STATE', header: 'Status', width: 12, format: formatStatus },
+    { key: 'MEGAENTITYID', header: 'Entity', width: 8 },
+  ];
+
+  console.log(createTable(result.adjustments as unknown as Record<string, unknown>[], columns));
+  printInfo(`Found ${result.adjustments.length} AR adjustment(s)`);
+}
+
+async function handleGetAdjustment(
+  client: SageClient, 
+  options: { recordNo?: string; adjustmentId?: string }
+): Promise<void> {
+  const { recordNo, adjustmentId } = options;
+  
+  printHeader(`AR Adjustment Details`);
+  
+  let result;
+  
+  if (recordNo) {
+    result = await getArAdjustment(client, recordNo);
+  } else if (adjustmentId) {
+    result = await queryArAdjustmentById(client, adjustmentId);
+  } else {
+    printError('No adjustment identifier provided');
+    return;
+  }
+  
+  if (!result.success || !result.adjustment) {
+    printError(result.error || 'Failed to get adjustment');
+    return;
+  }
+
+  const adj = result.adjustment;
+  
+  // Header section
+  console.log(chalk.bold.cyan('\n┌─ Adjustment Header ─────────────────────────────────────────┐'));
+  printKeyValues({
+    'Adjustment ID': adj.RECORDID,
+    'Record Number': adj.RECORDNO,
+    'State': formatStatus(adj.STATE),
+    'Description': adj.DESCRIPTION || '-',
+  });
+
+  // Amounts section
+  console.log(chalk.bold.cyan('\n┌─ Amounts ────────────────────────────────────────────────────┐'));
+  printKeyValues({
+    'Total Entered': formatCurrency(adj.TRX_TOTALENTERED),
+    'Total Paid': formatCurrency(adj.TRX_TOTALPAID),
+    'Total Due': formatCurrency(adj.TRX_TOTALDUE),
+    'Total Selected': formatCurrency(adj.TRX_TOTALSELECTED),
+    'Currency': adj.CURRENCY || 'USD',
+  });
+
+  if (adj.TOTALENTERED !== adj.TRX_TOTALENTERED) {
+    console.log(chalk.gray(`  Base amounts: Entered=${formatCurrency(adj.TOTALENTERED)}, Paid=${formatCurrency(adj.TOTALPAID)}, Due=${formatCurrency(adj.TOTALDUE)}`));
+  }
+
+  // Customer section
+  console.log(chalk.bold.cyan('\n┌─ Customer ───────────────────────────────────────────────────┐'));
+  printKeyValues({
+    'Customer ID': adj.CUSTOMERID,
+    'Customer Name': adj.CUSTOMERNAME || '-',
+  });
+  if (adj.BILLTOPAYTOCONTACTNAME) {
+    console.log(`  Bill To: ${adj.BILLTOPAYTOCONTACTNAME}`);
+  }
+  if (adj.SHIPTORETURNTOCONTACTNAME) {
+    console.log(`  Ship To: ${adj.SHIPTORETURNTOCONTACTNAME}`);
+  }
+
+  // Dates section
+  console.log(chalk.bold.cyan('\n┌─ Dates ──────────────────────────────────────────────────────┐'));
+  printKeyValues({
+    'Created': adj.WHENCREATED || '-',
+    'Posted': adj.WHENPOSTED || '-',
+    'Paid': adj.WHENPAID || '-',
+  });
+
+  // Entity/Batch section
+  if (adj.MEGAENTITYID || adj.PRBATCH) {
+    console.log(chalk.bold.cyan('\n┌─ Entity & Batch ─────────────────────────────────────────────┐'));
+    const entityInfo: Record<string, string> = {};
+    if (adj.MEGAENTITYID) entityInfo['Entity'] = `${adj.MEGAENTITYID}${adj.MEGAENTITYNAME ? ` (${adj.MEGAENTITYNAME})` : ''}`;
+    if (adj.PRBATCH) entityInfo['Batch'] = adj.PRBATCH;
+    printKeyValues(entityInfo);
+  }
+
+  // Audit section
+  if (adj.AUWHENCREATED || adj.WHENMODIFIED || adj.CREATEDBYLOGINID || adj.MODIFIEDBYLOGINID) {
+    console.log(chalk.bold.cyan('\n┌─ Audit ──────────────────────────────────────────────────────┐'));
+    const auditInfo: Record<string, string> = {};
+    if (adj.AUWHENCREATED) auditInfo['Created At'] = adj.AUWHENCREATED;
+    if (adj.CREATEDBYLOGINID) auditInfo['Created By'] = adj.CREATEDBYLOGINID;
+    if (adj.WHENMODIFIED) auditInfo['Modified At'] = adj.WHENMODIFIED;
+    if (adj.MODIFIEDBYLOGINID) auditInfo['Modified By'] = adj.MODIFIEDBYLOGINID;
+    printKeyValues(auditInfo);
+  }
+
+  console.log();
 }
 
 async function handleListAccounts(client: SageClient): Promise<void> {
@@ -1772,6 +1936,8 @@ function showHelp(): void {
   console.log('  list invoices                List open invoices');
   console.log('  list payments                List recent payments');
   console.log('  list payments for customer X Filter payments by customer');
+  console.log('  list adjustments             List AR adjustments');
+  console.log('  list adjustments for cust X  Filter adjustments by customer');
   console.log('  list accounts                List GL accounts');
   console.log('  list labels                  List account labels');
   console.log('  list bank accounts           List available bank accounts');
@@ -1786,6 +1952,7 @@ function showHelp(): void {
   console.log('  get customer "Acme Corp"     Search customer by name');
   console.log('  get customer 10014 contact   View all contact sections');
   console.log('  get payment 12345            Get payment by record number');
+  console.log('  get adjustment ADJ-001       Get AR adjustment by ID');
   console.log();
 
   console.log(chalk.bold('Pay Invoices:'));
@@ -1802,6 +1969,13 @@ function showHelp(): void {
   console.log('  create 5 invoices            Create multiple invoices');
   console.log('  create invoice for customer CUST-001');
   console.log('  create invoice customer CUST-001 gl account 4000 $100');
+  console.log();
+
+  console.log(chalk.bold('AR Adjustments:'));
+  console.log('  list adjustments             List all AR adjustments');
+  console.log('  list adjustments for customer X');
+  console.log('  get adjustment ADJ-001       Get adjustment by ID');
+  console.log('  get adjustment 12345         Get adjustment by record number');
   console.log();
 
   console.log(chalk.bold('Defaults & Learning:'));
@@ -1986,6 +2160,23 @@ async function main(): Promise<void> {
 
     case 'pay-invoice':
       await handlePayInvoice(client, cmd);
+      break;
+
+    case 'list-adjustments':
+      await handleListAdjustments(client, cmd.customerId);
+      break;
+
+    case 'get-adjustment':
+      if (!cmd.adjustmentRecordNo && !cmd.adjustmentId) {
+        printError('Please specify an adjustment ID or record number:');
+        printInfo('  get adjustment ADJ-001    (by Adjustment ID)');
+        printInfo('  get adjustment 12345      (by Record Number)');
+        return;
+      }
+      await handleGetAdjustment(client, { 
+        recordNo: cmd.adjustmentRecordNo, 
+        adjustmentId: cmd.adjustmentId 
+      });
       break;
 
     default:

@@ -1,7 +1,7 @@
 {
   "invoice": {
     "workingDefaults": {
-      "customerId": "25183",
+      "customerId": "28008",
       "currency": "USD",
       "glAccountNo": 60600,
       "locationId": 700,
@@ -254,6 +254,30 @@
         "locationId": 700,
         "departmentId": 100,
         "createdAt": "2026-05-20T20:43:30.096Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T21:57:11.088Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T21:57:13.238Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T21:57:15.317Z"
       }
     ]
   },
@@ -277,5 +301,5 @@
       }
     ]
   },
-  "lastUpdated": "2026-05-20T20:43:30.096Z"
+  "lastUpdated": "2026-05-20T21:57:15.317Z"
 }

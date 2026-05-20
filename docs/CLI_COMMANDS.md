@@ -318,6 +318,66 @@ npm run agent "show defaults"
 
 ---
 
+## AR Adjustment Commands
+
+Query and view AR adjustments (advances, debit memos, etc.).
+
+### List Adjustments
+
+
+| Command                              | Description                           |
+| ------------------------------------ | ------------------------------------- |
+| `list adjustments`                   | List all AR adjustments               |
+| `list adjustments for customer <ID>` | Filter adjustments by customer        |
+| `list advances`                      | Alias for `list adjustments`          |
+
+
+The list view shows:
+
+- Adjustment ID (RECORDID)
+- Record Number
+- Customer ID and Name
+- Date Created
+- Amount and Amount Due
+- Status (Posted, Paid, etc.)
+- Entity
+
+**Examples:**
+
+```bash
+npm run agent "list adjustments"
+npm run agent "list adjustments for customer 10001"
+npm run agent "list advances for customer 28008"
+```
+
+### Get Adjustment Details
+
+
+| Command                      | Description                         |
+| ---------------------------- | ----------------------------------- |
+| `get adjustment <ID>`        | Get adjustment by Adjustment ID     |
+| `get adjustment <RECORDNO>`  | Get adjustment by record number     |
+
+
+The detail view shows:
+
+- Header (Adjustment ID, Record Number, Status, Description)
+- Amounts (Total Entered, Total Paid, Total Due, Currency)
+- Customer (Customer ID, Name, Bill To, Ship To)
+- Dates (Created, Posted, Paid)
+- Entity & Batch information
+- Audit trail (Created/Modified by, timestamps)
+
+**Examples:**
+
+```bash
+npm run agent "get adjustment ADJ-001"
+npm run agent "get adjustment 12345"
+npm run agent "get advance 67890"
+```
+
+---
+
 ## Defaults & Learning Commands
 
 Manage defaults and the agent's learned knowledge.
