@@ -51,22 +51,22 @@ npm run agent "status"               # Check session status
 # List Records
 npm run agent "list customers"       # List active customers
 npm run agent "list invoices"        # List open invoices
+npm run agent "list payments"        # List recent payments
 npm run agent "list accounts"        # List GL accounts
+npm run agent "list bank accounts"   # List bank accounts for payments
 
 # Get Details
 npm run agent "get invoice INV25948" # Get invoice by ID
-npm run agent "get invoice 54284"    # Get invoice by record number
 npm run agent "get customer 10014"   # Get customer details
-npm run agent "get customer 10014 contact"        # View all contacts
-npm run agent "get customer 10014 contact BILLTO" # View bill-to contact
+npm run agent "get payment 12345"    # Get payment details
 
-# Create
-npm run agent "create invoice"
+# Create & Pay
 npm run agent "create invoice for customer 10014 gl 4000 $250"
+npm run agent "pay invoice INV25948"           # Pay invoice in full
+npm run agent "pay invoice INV25948 $100"      # Partial payment
 
 # Defaults & Learning
 npm run agent "show defaults"        # View defaults & learned knowledge
-npm run agent "set default customer 10014"
 npm run agent "reset knowledge"      # Clear learned data
 ```
 
@@ -119,7 +119,8 @@ npm run agent "show defaults"
 
 ## Roadmap
 
-- [ ] Payment CLI commands (pay invoice, apply credits)
+- [ ] Apply credits to invoices
+- [ ] Reverse payments
 - [ ] Get GL account details
 - [ ] Playwright dashboard verification
 - [ ] More intelligent error recovery
@@ -127,6 +128,8 @@ npm run agent "show defaults"
 
 ## Recently Completed
 
+- [x] **Payment operations** - Pay invoices with learning (auto-discovers bank accounts)
+- [x] List payments, get payment details, list bank accounts
 - [x] Get customer details with full information display
 - [x] Get customer contact sections (DISPLAYCONTACT, BILLTO, SHIPTO)
 - [x] Smart display that hides empty fields

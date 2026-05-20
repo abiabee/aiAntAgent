@@ -1,7 +1,7 @@
 {
   "invoice": {
     "workingDefaults": {
-      "customerId": "10776",
+      "customerId": "10014",
       "currency": "USD",
       "glAccountNo": 60600,
       "locationId": 110,
@@ -151,18 +151,36 @@
         "locationId": 110,
         "departmentId": 100,
         "createdAt": "2026-05-18T23:27:08.543Z"
+      },
+      {
+        "customerId": "10014",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 110,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T18:33:18.409Z"
       }
     ]
   },
   "payment": {
-    "workingDefaults": {},
-    "badValues": {
-      "customerIds": [],
-      "glAccountNos": [],
-      "locationIds": [],
-      "departmentIds": []
+    "workingDefaults": {
+      "bankAccountId": "RECON_TEST",
+      "paymentMethod": "Cash",
+      "currency": "USD"
     },
-    "successfulCombos": []
+    "badValues": {
+      "bankAccountIds": [],
+      "paymentMethods": []
+    },
+    "successfulCombos": [
+      {
+        "customerId": 10014,
+        "bankAccountId": "RECON_TEST",
+        "paymentMethod": "Cash",
+        "currency": "USD",
+        "createdAt": "2026-05-20T19:06:40.595Z"
+      }
+    ]
   },
-  "lastUpdated": "2026-05-18T23:27:08.543Z"
+  "lastUpdated": "2026-05-20T19:06:40.595Z"
 }

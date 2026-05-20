@@ -11,9 +11,12 @@ import {
 } from './sage/actions/invoice.js';
 import { listCustomers, getCustomer, Customer, CustomerFull, CustomerContact, CustomerAddress, CustomerEntityContact } from './sage/actions/listCustomers.js';
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
+import { listAllBankAccounts, BankAccount } from './sage/actions/bankAccount.js';
+import { listPayments, getPayment, Payment, PaymentFull, PaymentDetail } from './sage/actions/payment.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
 import { formatSageErrors } from './sage/parser.js';
 import { createInvoiceWithLearning, LearningAttempt } from './sage/learningInvoice.js';
+import { createPaymentWithLearning, PaymentLearningAttempt } from './sage/learningPayment.js';
 import { getKnowledgeStore } from './sage/knowledge.js';
 import { describeErrorType } from './sage/errorClassifier.js';
 import { 
@@ -27,7 +30,8 @@ import {
   printHeader,
   printKeyValues,
   formatCurrency,
-  formatRaw
+  formatRaw,
+  formatStatus
 } from './output/table.js';
 
 // =============================================================================
@@ -44,6 +48,9 @@ interface ParsedCommand {
   recordNo?: string;
   invoiceId?: string;  // e.g., INV25948
   contactType?: string;  // e.g., DISPLAYCONTACT, BILLTO, SHIPTO, CONTACTINFO
+  paymentRecordNo?: string;
+  paymentMethod?: string;
+  bankAccountId?: string;
   options: Record<string, string>;
 }
 
@@ -76,6 +83,15 @@ function parseCommand(input: string): ParsedCommand {
   if (lower.includes('list') || lower.includes('show')) {
     if (lower.includes('customer')) {
       command.action = 'list-customers';
+    } else if (lower.includes('payment')) {
+      command.action = 'list-payments';
+      // Check for "for customer X" filter
+      const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+      if (customerMatch) {
+        command.customerId = customerMatch[1];
+      }
+    } else if (lower.includes('bank')) {
+      command.action = 'list-bank-accounts';
     } else if (lower.includes('invoice')) {
       command.action = 'list-invoices';
     } else if (lower.includes('account') || lower.includes('gl')) {
@@ -103,6 +119,13 @@ function parseCommand(input: string): ParsedCommand {
           command.recordNo = match[1];
         }
       }
+    } else if (lower.includes('payment')) {
+      command.action = 'get-payment';
+      // Extract payment record number
+      const match = lower.match(/payment\s*#?\s*(\d+)/i);
+      if (match) {
+        command.paymentRecordNo = match[1];
+      }
     } else if (lower.includes('customer')) {
       command.action = 'get-customer';
       // Check for contact subcommand: "get customer CUSTID contact CONTACTTYPE"
@@ -119,6 +142,42 @@ function parseCommand(input: string): ParsedCommand {
         }
       }
     }
+    return command;
+  }
+
+  // Pay invoice: "pay invoice INV25948" or "pay invoice 54284 amount 100"
+  if (lower.includes('pay') && lower.includes('invoice')) {
+    command.action = 'pay-invoice';
+    
+    // Extract invoice ID (e.g., INV25948) or record number
+    const invoiceIdMatch = input.match(/invoice\s+(INV\d+)/i);
+    if (invoiceIdMatch) {
+      command.invoiceId = invoiceIdMatch[1].toUpperCase();
+    } else {
+      const recordMatch = input.match(/invoice\s+(\d+)/i);
+      if (recordMatch) {
+        command.recordNo = recordMatch[1];
+      }
+    }
+
+    // Extract amount: "amount 100" or "$100"
+    const amountMatch = lower.match(/\$([\d.]+)|amount\s+([\d.]+)/i);
+    if (amountMatch) {
+      command.amount = parseFloat(amountMatch[1] || amountMatch[2]);
+    }
+
+    // Extract payment method: "method Cash" or "method EFT"
+    const methodMatch = input.match(/method\s+(\w+)/i);
+    if (methodMatch) {
+      command.paymentMethod = methodMatch[1];
+    }
+
+    // Extract bank account: "bank BOA" or "account BOA"
+    const bankMatch = input.match(/(?:bank|account)\s+([A-Za-z0-9_-]+)/i);
+    if (bankMatch && !lower.includes('gl account')) {
+      command.bankAccountId = bankMatch[1];
+    }
+
     return command;
   }
 
@@ -1129,6 +1188,275 @@ async function handleCreateInvoice(
   }
 }
 
+// =============================================================================
+// Payment Handlers
+// =============================================================================
+
+async function handleListBankAccounts(client: SageClient): Promise<void> {
+  printHeader('Bank Accounts');
+  
+  const result = await listAllBankAccounts(client, { pageSize: 30 });
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to list bank accounts');
+    return;
+  }
+
+  if (result.accounts.length === 0) {
+    printInfo('No bank accounts found');
+    return;
+  }
+
+  const columns = [
+    { key: 'BANKACCOUNTID', header: 'Account ID', width: 20, format: formatRaw },
+    { key: 'BANKNAME', header: 'Bank Name', width: 25 },
+    { key: 'DESCRIPTION', header: 'Description', width: 25 },
+    { key: 'CURRENCY', header: 'Currency', width: 10 },
+    { key: 'STATUS', header: 'Status', width: 10, format: formatStatus },
+  ];
+
+  console.log(createTable(result.accounts as unknown as Record<string, unknown>[], columns));
+  printInfo(`Found ${result.accounts.length} bank account(s)`);
+}
+
+async function handleListPayments(client: SageClient, customerId?: string): Promise<void> {
+  printHeader(customerId ? `Payments for Customer ${customerId}` : 'Recent Payments');
+  
+  const result = await listPayments(client, { customerId, pageSize: 30 });
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to list payments');
+    return;
+  }
+
+  if (result.payments.length === 0) {
+    printInfo('No payments found');
+    return;
+  }
+
+  const columns = [
+    { key: 'RECORDNO', header: 'Record #', width: 12, format: formatRaw },
+    { key: 'DOCNUMBER', header: 'Doc #', width: 15, format: formatRaw },
+    { key: 'CUSTOMERID', header: 'Customer', width: 15, format: formatRaw },
+    { key: 'TRX_TOTALPAID', header: 'Amount', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'PAYMENTMETHOD', header: 'Method', width: 12 },
+    { key: 'RECEIPTDATE', header: 'Date', width: 12 },
+    { key: 'STATE', header: 'Status', width: 12, format: formatStatus },
+  ];
+
+  console.log(createTable(result.payments as unknown as Record<string, unknown>[], columns));
+  printInfo(`Found ${result.payments.length} payment(s)`);
+}
+
+async function handleGetPayment(client: SageClient, recordNo: string): Promise<void> {
+  printHeader('Payment Details');
+  
+  if (!recordNo) {
+    printError('Please specify a payment record number');
+    return;
+  }
+
+  printInfo(`Fetching payment: ${recordNo}`);
+  const result = await getPayment(client, recordNo);
+  
+  if (!result.success || !result.payment) {
+    printError(result.error || 'Failed to get payment');
+    return;
+  }
+
+  const payment = result.payment;
+  
+  // Status styling
+  const stateColor = payment.STATE === 'Posted' ? chalk.green :
+                     payment.STATE === 'Reversed' ? chalk.red :
+                     payment.STATE === 'Submitted' ? chalk.yellow : chalk.white;
+
+  console.log();
+  console.log(chalk.bold(`Payment -- ${payment.DOCNUMBER || payment.RECORDNO}`));
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log();
+  
+  // Quick stats
+  const amount = Number(payment.TRX_TOTALPAID || 0);
+  const currency = payment.CURRENCY || 'USD';
+  
+  printKeyValues({
+    'Record No': payment.RECORDNO || '-',
+    'Doc Number': payment.DOCNUMBER || '-',
+    'Customer': payment.CUSTOMERID || '-',
+    'Amount': `${formatCurrency(amount)} ${currency}`,
+    'State': stateColor(payment.STATE || '-'),
+  });
+
+  console.log();
+  console.log(chalk.bold.cyan('Payment Details'));
+  console.log();
+  
+  printKeyValues({
+    'Payment Method': payment.PAYMENTMETHOD || '-',
+    'Receipt Date': payment.RECEIPTDATE || '-',
+    'Payment Date': payment.PAYMENTDATE || '-',
+    'Bank Account': payment.FINANCIALENTITY || payment.BANKACCOUNTID || '-',
+    'Currency': currency,
+  });
+
+  // Payment line items
+  const details = payment.ARPYMTDETAILS?.arpymtdetail;
+  if (details) {
+    const items = Array.isArray(details) ? details : [details];
+    console.log();
+    console.log(chalk.bold.cyan(`Applied to Invoices (${items.length})`));
+    console.log();
+    
+    const detailColumns = [
+      { key: 'RECORDKEY', header: 'Invoice #', width: 15, format: formatRaw },
+      { key: 'TRX_PAYMENTAMOUNT', header: 'Amount', width: 15, align: 'right' as const, format: formatCurrency },
+      { key: 'ENTRYDESCRIPTION', header: 'Description', width: 30 },
+    ];
+    
+    console.log(createTable(items as unknown as Record<string, unknown>[], detailColumns));
+  }
+
+  // Audit info
+  console.log();
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log(chalk.gray(`Record No: ${payment.RECORDNO || '-'} | Created: ${payment.WHENCREATED || payment.AUWHENCREATED || '-'}`));
+}
+
+async function handlePayInvoice(
+  client: SageClient,
+  cmd: ParsedCommand
+): Promise<void> {
+  printHeader('Pay Invoice');
+
+  // Need to get the invoice record number
+  let invoiceRecordNo: string | undefined = cmd.recordNo;
+
+  // If we have an invoice ID (like INV25948), look it up first
+  if (cmd.invoiceId && !invoiceRecordNo) {
+    printInfo(`Looking up Invoice ID: ${cmd.invoiceId}`);
+    const queryResult = await queryInvoiceById(client, cmd.invoiceId);
+    
+    if (!queryResult.success || !queryResult.invoice) {
+      printError(queryResult.error || `Invoice ${cmd.invoiceId} not found`);
+      return;
+    }
+    
+    invoiceRecordNo = queryResult.invoice.RECORDNO;
+    printInfo(`Found: Record No ${invoiceRecordNo}`);
+  }
+
+  if (!invoiceRecordNo) {
+    printError('Please specify an invoice to pay:');
+    printInfo('  pay invoice INV25948         (by Invoice ID)');
+    printInfo('  pay invoice 54284            (by Record Number)');
+    printInfo('  pay invoice INV25948 $100    (partial payment)');
+    printInfo('  pay invoice INV25948 amount 50');
+    return;
+  }
+
+  // Get the invoice details first
+  const invoiceResult = await getInvoice(client, invoiceRecordNo);
+  if (!invoiceResult.success || !invoiceResult.invoice) {
+    printError(invoiceResult.error || 'Failed to fetch invoice');
+    return;
+  }
+
+  const invoice = invoiceResult.invoice;
+  const amountDue = Number(invoice.TRX_TOTALDUE || invoice.TOTALDUE || 0);
+  const paymentAmount = cmd.amount !== undefined ? cmd.amount : amountDue;
+  const currency = invoice.CURRENCY || 'USD';
+
+  printInfo(`Invoice: ${invoice.RECORDID || invoiceRecordNo}`);
+  printInfo(`Customer: ${invoice.CUSTOMERID}`);
+  printInfo(`Amount Due: ${formatCurrency(amountDue)} ${currency}`);
+  printInfo(`Payment Amount: ${formatCurrency(paymentAmount)} ${currency}`);
+  
+  if (cmd.paymentMethod) {
+    printInfo(`Payment Method: ${cmd.paymentMethod}`);
+  }
+  if (cmd.bankAccountId) {
+    printInfo(`Bank Account: ${cmd.bankAccountId}`);
+  }
+  console.log();
+
+  if (amountDue <= 0) {
+    printError('Invoice has no balance due');
+    return;
+  }
+
+  if (paymentAmount > amountDue) {
+    printInfo(chalk.yellow(`Warning: Amount ${formatCurrency(paymentAmount)} exceeds due ${formatCurrency(amountDue)}. Will pay ${formatCurrency(amountDue)}.`));
+  }
+
+  // Use learning wrapper
+  const result = await createPaymentWithLearning(
+    client,
+    {
+      invoiceRecordNo,
+      amount: paymentAmount,
+      paymentMethod: cmd.paymentMethod,
+      bankAccountId: cmd.bankAccountId,
+      currency,
+    },
+    (attempt: PaymentLearningAttempt) => {
+      if (attempt.success) {
+        console.log(chalk.green(`  Attempt ${attempt.attemptNumber}: ✓ Success`));
+      } else {
+        console.log(chalk.yellow(`  Attempt ${attempt.attemptNumber}: ✗ Failed`));
+        console.log(chalk.gray(`    Error: ${describeErrorType(attempt.errorType!)}`));
+        if (attempt.recovery) {
+          console.log(chalk.blue(`    Recovery: ${attempt.recovery}`));
+        }
+      }
+    }
+  );
+
+  console.log();
+
+  if (result.success) {
+    printSuccess(`Payment created successfully!`);
+    printKeyValues({
+      'Payment Record': result.recordNo || '-',
+      'Invoice': result.invoiceId || invoiceRecordNo,
+      'Amount Paid': formatCurrency(result.amountPaid || paymentAmount),
+      'Attempts': result.attempts.length,
+    });
+
+    // Show the updated invoice state
+    console.log();
+    printInfo('Verifying invoice status...');
+    const updatedInvoice = await getInvoice(client, invoiceRecordNo);
+    if (updatedInvoice.success && updatedInvoice.invoice) {
+      const newAmountDue = Number(updatedInvoice.invoice.TRX_TOTALDUE || updatedInvoice.invoice.TOTALDUE || 0);
+      const newState = updatedInvoice.invoice.STATE;
+      
+      const stateColor = newState === 'Paid' ? chalk.green :
+                        newState === 'Partially Paid' ? chalk.yellow : chalk.white;
+      
+      printKeyValues({
+        'Invoice State': stateColor(newState || '-'),
+        'Remaining Due': formatCurrency(newAmountDue),
+      });
+    }
+
+    // Show learned defaults
+    const knowledge = getKnowledgeStore();
+    const paymentKnowledge = await knowledge.getPaymentKnowledge();
+    if (paymentKnowledge.workingDefaults.bankAccountId) {
+      console.log();
+      printInfo(chalk.bold('Learned payment defaults:'));
+      printInfo(`  Bank Account: ${paymentKnowledge.workingDefaults.bankAccountId}`);
+      if (paymentKnowledge.workingDefaults.paymentMethod) {
+        printInfo(`  Payment Method: ${paymentKnowledge.workingDefaults.paymentMethod}`);
+      }
+    }
+  } else {
+    printError(`Payment failed after ${result.attempts.length} attempts`);
+    console.log(chalk.red(result.finalError || 'Unknown error'));
+  }
+}
+
 async function handleShowDefaults(memory: MemoryStore): Promise<void> {
   printHeader('Current Defaults & Learned Knowledge');
   
@@ -1198,6 +1526,55 @@ async function handleShowDefaults(memory: MemoryStore): Promise<void> {
       console.log(`  ${chalk.green('✓')} ${parts.join(', ')} (${dateStr})`);
     }
   }
+
+  // Payment Knowledge
+  const paymentKnowledge = await knowledge.getPaymentKnowledge();
+  
+  console.log();
+  console.log(chalk.bold.blue('═══ Payment Knowledge ═══'));
+  
+  console.log();
+  console.log(chalk.bold('Learned Payment Defaults:'));
+  const paymentDefaults = paymentKnowledge.workingDefaults;
+  if (!paymentDefaults.bankAccountId && !paymentDefaults.paymentMethod) {
+    printInfo('No payment defaults learned yet');
+  } else {
+    printKeyValues({
+      'Bank Account': paymentDefaults.bankAccountId || chalk.gray('(not learned)'),
+      'Payment Method': paymentDefaults.paymentMethod || chalk.gray('(not learned)'),
+      'Currency': paymentDefaults.currency || chalk.gray('(not learned)'),
+    });
+  }
+
+  console.log();
+  console.log(chalk.bold('Known Bad Payment Values:'));
+  const paymentBad = paymentKnowledge.badValues;
+  const hasPaymentBadValues = paymentBad.bankAccountIds.length > 0 || paymentBad.paymentMethods.length > 0;
+  if (!hasPaymentBadValues) {
+    printInfo('No bad payment values recorded yet');
+  } else {
+    if (paymentBad.bankAccountIds.length > 0) {
+      console.log(`  ${chalk.red('Bank Accounts:')} ${paymentBad.bankAccountIds.join(', ')}`);
+    }
+    if (paymentBad.paymentMethods.length > 0) {
+      console.log(`  ${chalk.red('Payment Methods:')} ${paymentBad.paymentMethods.join(', ')}`);
+    }
+  }
+
+  console.log();
+  console.log(chalk.bold('Successful Payment Combinations:'));
+  if (paymentKnowledge.successfulCombos.length === 0) {
+    printInfo('No successful payments recorded yet');
+  } else {
+    for (const combo of paymentKnowledge.successfulCombos.slice(-5)) {
+      const parts = [];
+      if (combo.customerId) parts.push(`Customer: ${combo.customerId}`);
+      if (combo.bankAccountId) parts.push(`Bank: ${combo.bankAccountId}`);
+      if (combo.paymentMethod) parts.push(`Method: ${combo.paymentMethod}`);
+      const dateStr = new Date(combo.createdAt).toLocaleDateString();
+      console.log(`  ${chalk.green('✓')} ${parts.join(', ')} (${dateStr})`);
+    }
+  }
 }
 
 async function handleSetDefault(memory: MemoryStore, options: Record<string, string>): Promise<void> {
@@ -1261,8 +1638,11 @@ function showHelp(): void {
   console.log(chalk.bold('List Records:'));
   console.log('  list customers               List all active customers');
   console.log('  list invoices                List open invoices');
+  console.log('  list payments                List recent payments');
+  console.log('  list payments for customer X Filter payments by customer');
   console.log('  list accounts                List GL accounts');
   console.log('  list labels                  List account labels');
+  console.log('  list bank accounts           List available bank accounts');
   console.log();
 
   console.log(chalk.bold('Get Specific Records:'));
@@ -1270,9 +1650,16 @@ function showHelp(): void {
   console.log('  get invoice 54284            Get invoice by record number');
   console.log('  get customer 10014           Get customer details by ID');
   console.log('  get customer 10014 contact   View all contact sections');
-  console.log('  get customer 10014 contact DISPLAYCONTACT');
-  console.log('  get customer 10014 contact BILLTO');
-  console.log('  get customer 10014 contact SHIPTO');
+  console.log('  get payment 12345            Get payment by record number');
+  console.log();
+
+  console.log(chalk.bold('Pay Invoices:'));
+  console.log('  pay invoice INV25948         Pay invoice in full');
+  console.log('  pay invoice 54284            Pay by record number');
+  console.log('  pay invoice INV25948 $100    Partial payment');
+  console.log('  pay invoice INV25948 amount 50');
+  console.log('  pay invoice INV25948 method Cash');
+  console.log('  pay invoice INV25948 bank BOA');
   console.log();
 
   console.log(chalk.bold('Create Invoices:'));
@@ -1412,6 +1799,27 @@ async function main(): Promise<void> {
 
     case 'create-invoice':
       await handleCreateInvoice(client, memory, cmd);
+      break;
+
+    case 'list-bank-accounts':
+      await handleListBankAccounts(client);
+      break;
+
+    case 'list-payments':
+      await handleListPayments(client, cmd.customerId);
+      break;
+
+    case 'get-payment':
+      if (!cmd.paymentRecordNo) {
+        printError('Please specify a payment record number:');
+        printInfo('  get payment 12345');
+        return;
+      }
+      await handleGetPayment(client, cmd.paymentRecordNo);
+      break;
+
+    case 'pay-invoice':
+      await handlePayInvoice(client, cmd);
       break;
 
     default:

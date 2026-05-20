@@ -18,11 +18,9 @@ export const createArPaymentTemplate = `
     {{#if docNumber}}
     <DOCNUMBER>{{docNumber}}</DOCNUMBER>
     {{/if}}
+    <BASECURR>{{baseCurrency}}</BASECURR>
     {{#if currency}}
     <CURRENCY>{{currency}}</CURRENCY>
-    {{/if}}
-    {{#if baseCurrency}}
-    <BASECURR>{{baseCurrency}}</BASECURR>
     {{/if}}
     {{#if amountToPay}}
     <TRX_AMOUNTTOPAY>{{amountToPay}}</TRX_AMOUNTTOPAY>

@@ -17,6 +17,14 @@ export interface SuccessfulCombo {
   createdAt: string;
 }
 
+export interface PaymentSuccessfulCombo {
+  customerId: string;
+  bankAccountId?: string;
+  paymentMethod?: string;
+  currency?: string;
+  createdAt: string;
+}
+
 export interface ActionKnowledge {
   workingDefaults: {
     customerId?: string;
@@ -34,9 +42,22 @@ export interface ActionKnowledge {
   successfulCombos: SuccessfulCombo[];
 }
 
+export interface PaymentKnowledge {
+  workingDefaults: {
+    bankAccountId?: string;
+    paymentMethod?: string;
+    currency?: string;
+  };
+  badValues: {
+    bankAccountIds: string[];
+    paymentMethods: string[];
+  };
+  successfulCombos: PaymentSuccessfulCombo[];
+}
+
 export interface Knowledge {
   invoice: ActionKnowledge;
-  payment: ActionKnowledge;
+  payment: PaymentKnowledge;
   lastUpdated: string;
 }
 
@@ -54,10 +75,8 @@ const DEFAULT_KNOWLEDGE: Knowledge = {
   payment: {
     workingDefaults: {},
     badValues: {
-      customerIds: [],
-      glAccountNos: [],
-      locationIds: [],
-      departmentIds: [],
+      bankAccountIds: [],
+      paymentMethods: [],
     },
     successfulCombos: [],
   },
@@ -94,14 +113,12 @@ export class KnowledgeStore {
           successfulCombos: parsed.invoice?.successfulCombos || [],
         },
         payment: {
-          workingDefaults: { ...DEFAULT_KNOWLEDGE.payment.workingDefaults, ...parsed.payment?.workingDefaults },
+          workingDefaults: { ...DEFAULT_KNOWLEDGE.payment.workingDefaults, ...(parsed.payment?.workingDefaults as PaymentKnowledge['workingDefaults']) },
           badValues: {
-            customerIds: parsed.payment?.badValues?.customerIds || [],
-            glAccountNos: parsed.payment?.badValues?.glAccountNos || [],
-            locationIds: parsed.payment?.badValues?.locationIds || [],
-            departmentIds: parsed.payment?.badValues?.departmentIds || [],
+            bankAccountIds: (parsed.payment?.badValues as PaymentKnowledge['badValues'])?.bankAccountIds || [],
+            paymentMethods: (parsed.payment?.badValues as PaymentKnowledge['badValues'])?.paymentMethods || [],
           },
-          successfulCombos: parsed.payment?.successfulCombos || [],
+          successfulCombos: (parsed.payment?.successfulCombos as PaymentSuccessfulCombo[]) || [],
         },
         lastUpdated: parsed.lastUpdated || new Date().toISOString(),
       };
@@ -122,26 +139,41 @@ export class KnowledgeStore {
   }
 
   /**
-   * Get knowledge for an action type
+   * Get knowledge for invoice action
    */
-  async getActionKnowledge(action: 'invoice' | 'payment'): Promise<ActionKnowledge> {
+  async getInvoiceKnowledge(): Promise<ActionKnowledge> {
+    await this.load();
+    return this.knowledge.invoice;
+  }
+
+  /**
+   * Get knowledge for payment action
+   */
+  async getPaymentKnowledge(): Promise<PaymentKnowledge> {
+    await this.load();
+    return this.knowledge.payment;
+  }
+
+  /**
+   * Get knowledge for an action type (backwards compatible)
+   */
+  async getActionKnowledge(action: 'invoice'): Promise<ActionKnowledge>;
+  async getActionKnowledge(action: 'payment'): Promise<PaymentKnowledge>;
+  async getActionKnowledge(action: 'invoice' | 'payment'): Promise<ActionKnowledge | PaymentKnowledge> {
     await this.load();
     return this.knowledge[action];
   }
 
   /**
-   * Mark a value as bad (don't use it again)
+   * Mark a value as bad for invoice operations
    */
-  async markBadValue(
-    action: 'invoice' | 'payment',
+  async markInvoiceBadValue(
     type: 'customerId' | 'glAccountNo' | 'locationId' | 'departmentId',
     value: string
   ): Promise<void> {
     await this.load();
-
-    const badList = this.knowledge[action].badValues;
+    const badList = this.knowledge.invoice.badValues;
     const key = `${type}s` as keyof typeof badList;
-    
     if (!badList[key].includes(value)) {
       badList[key].push(value);
       await this.save();
@@ -149,51 +181,115 @@ export class KnowledgeStore {
   }
 
   /**
-   * Check if a value is known to be bad
+   * Mark a value as bad for payment operations
    */
-  async isBadValue(
-    action: 'invoice' | 'payment',
+  async markPaymentBadValue(
+    type: 'bankAccountId' | 'paymentMethod',
+    value: string
+  ): Promise<void> {
+    await this.load();
+    const badList = this.knowledge.payment.badValues;
+    const key = `${type}s` as keyof typeof badList;
+    if (!badList[key].includes(value)) {
+      badList[key].push(value);
+      await this.save();
+    }
+  }
+
+  /**
+   * Mark a value as bad (backwards compatible - invoice only)
+   */
+  async markBadValue(
+    action: 'invoice',
     type: 'customerId' | 'glAccountNo' | 'locationId' | 'departmentId',
+    value: string
+  ): Promise<void> {
+    await this.markInvoiceBadValue(type, value);
+  }
+
+  /**
+   * Check if a value is known to be bad for payments
+   */
+  async isPaymentBadValue(
+    type: 'bankAccountId' | 'paymentMethod',
     value: string
   ): Promise<boolean> {
     await this.load();
-
-    const badList = this.knowledge[action].badValues;
+    const badList = this.knowledge.payment.badValues;
     const key = `${type}s` as keyof typeof badList;
-    
     return badList[key].includes(value);
   }
 
   /**
-   * Record a successful combination (only call after actual success!)
+   * Check if a value is known to be bad (backwards compatible - invoice only)
    */
-  async recordSuccess(
-    action: 'invoice' | 'payment',
-    combo: Omit<SuccessfulCombo, 'createdAt'>
-  ): Promise<void> {
+  async isBadValue(
+    action: 'invoice',
+    type: 'customerId' | 'glAccountNo' | 'locationId' | 'departmentId',
+    value: string
+  ): Promise<boolean> {
     await this.load();
+    const badList = this.knowledge.invoice.badValues;
+    const key = `${type}s` as keyof typeof badList;
+    return badList[key].includes(value);
+  }
 
-    const actionKnowledge = this.knowledge[action];
+  /**
+   * Record a successful invoice combination
+   */
+  async recordInvoiceSuccess(combo: Omit<SuccessfulCombo, 'createdAt'>): Promise<void> {
+    await this.load();
+    const k = this.knowledge.invoice;
 
-    // Update working defaults
-    if (combo.customerId) actionKnowledge.workingDefaults.customerId = combo.customerId;
-    if (combo.glAccountNo) actionKnowledge.workingDefaults.glAccountNo = combo.glAccountNo;
-    if (combo.currency) actionKnowledge.workingDefaults.currency = combo.currency;
-    if (combo.locationId) actionKnowledge.workingDefaults.locationId = combo.locationId;
-    if (combo.departmentId) actionKnowledge.workingDefaults.departmentId = combo.departmentId;
+    if (combo.customerId) k.workingDefaults.customerId = combo.customerId;
+    if (combo.glAccountNo) k.workingDefaults.glAccountNo = combo.glAccountNo;
+    if (combo.currency) k.workingDefaults.currency = combo.currency;
+    if (combo.locationId) k.workingDefaults.locationId = combo.locationId;
+    if (combo.departmentId) k.workingDefaults.departmentId = combo.departmentId;
 
-    // Add to successful combos
-    actionKnowledge.successfulCombos.push({
+    k.successfulCombos.push({
       ...combo,
       createdAt: new Date().toISOString(),
     });
 
-    // Keep only last 50 successful combos
-    if (actionKnowledge.successfulCombos.length > 50) {
-      actionKnowledge.successfulCombos = actionKnowledge.successfulCombos.slice(-50);
+    if (k.successfulCombos.length > 50) {
+      k.successfulCombos = k.successfulCombos.slice(-50);
     }
 
     await this.save();
+  }
+
+  /**
+   * Record a successful payment combination
+   */
+  async recordPaymentSuccess(combo: Omit<PaymentSuccessfulCombo, 'createdAt'>): Promise<void> {
+    await this.load();
+    const k = this.knowledge.payment;
+
+    if (combo.bankAccountId) k.workingDefaults.bankAccountId = combo.bankAccountId;
+    if (combo.paymentMethod) k.workingDefaults.paymentMethod = combo.paymentMethod;
+    if (combo.currency) k.workingDefaults.currency = combo.currency;
+
+    k.successfulCombos.push({
+      ...combo,
+      createdAt: new Date().toISOString(),
+    });
+
+    if (k.successfulCombos.length > 50) {
+      k.successfulCombos = k.successfulCombos.slice(-50);
+    }
+
+    await this.save();
+  }
+
+  /**
+   * Record a successful combination (backwards compatible - invoice only)
+   */
+  async recordSuccess(
+    action: 'invoice',
+    combo: Omit<SuccessfulCombo, 'createdAt'>
+  ): Promise<void> {
+    await this.recordInvoiceSuccess(combo);
   }
 
   /**

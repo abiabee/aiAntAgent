@@ -173,26 +173,94 @@ npm run agent "list labels"
 
 ## Payment Commands
 
-> **Status:** Templates available, CLI commands coming soon.
-
 AR Payment operations for paying invoices.
 
-### Planned Commands
+### Pay Invoice
 
 | Command | Description |
 |---------|-------------|
-| `list payments` | List AR payments |
-| `get payment <RECORDNO>` | Get payment details |
-| `create payment` | Create a new AR payment |
-| `reverse payment <RECORDNO>` | Reverse an AR payment |
+| `pay invoice <INVID>` | Pay invoice in full by Invoice ID (e.g., INV25948) |
+| `pay invoice <RECORDNO>` | Pay invoice in full by record number |
+| `pay invoice <INVID> $<N>` | Partial payment of $N |
+| `pay invoice <INVID> amount <N>` | Partial payment (alternative syntax) |
+| `pay invoice <INVID> method <METHOD>` | Specify payment method |
+| `pay invoice <INVID> bank <ACCOUNTID>` | Specify bank account |
 
-### Available Templates
+**Payment Methods:** Cash, Check, EFT, ACH, Credit Card
 
-The following payment templates are ready for use:
-- `createArPaymentTemplate` - Create AR payments
-- `queryArPaymentsTemplate` - Query AR payments
-- `readArPaymentTemplate` - Read payment details
-- `reverseArPaymentTemplate` - Reverse payments
+The agent uses intelligent learning to discover working bank accounts and payment methods. When a payment fails due to an invalid account, it automatically tries other available bank accounts.
+
+**Examples:**
+
+```bash
+npm run agent "pay invoice INV25948"
+npm run agent "pay invoice 54284"
+npm run agent "pay invoice INV25948 \$100"
+npm run agent "pay invoice INV25948 amount 50"
+npm run agent "pay invoice INV25948 method Cash"
+npm run agent "pay invoice INV25948 bank BOA"
+```
+
+### List Payments
+
+| Command | Description |
+|---------|-------------|
+| `list payments` | List recent AR payments |
+| `list payments for customer <ID>` | Filter payments by customer |
+
+**Examples:**
+
+```bash
+npm run agent "list payments"
+npm run agent "list payments for customer 10014"
+```
+
+### Get Payment Details
+
+| Command | Description |
+|---------|-------------|
+| `get payment <RECORDNO>` | Get payment details by record number |
+
+The payment detail view displays:
+- Payment amount and status
+- Payment method and date
+- Bank account used
+- Applied invoices
+
+**Examples:**
+
+```bash
+npm run agent "get payment 12345"
+```
+
+### List Bank Accounts
+
+| Command | Description |
+|---------|-------------|
+| `list bank accounts` | List available bank/checking accounts |
+
+Use this to discover which bank accounts are available for payments.
+
+**Examples:**
+
+```bash
+npm run agent "list bank accounts"
+```
+
+### Learning Behavior
+
+The payment system learns from successful and failed attempts:
+
+1. **Bank Account Discovery** - When no bank account is specified, the agent fetches available accounts and tries them
+2. **Error Recovery** - If a bank account is invalid, it's marked as "bad" and the agent tries another
+3. **Successful Defaults** - After a successful payment, the working bank account becomes the default for future payments
+4. **Payment Methods** - If a payment method fails, the agent tries alternatives (Cash, Check, EFT, etc.)
+
+View learned payment defaults:
+
+```bash
+npm run agent "show defaults"
+```
 
 ---
 

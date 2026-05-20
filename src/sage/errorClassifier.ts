@@ -16,6 +16,14 @@ export type SageErrorType =
   | 'PERMISSION_DENIED'
   | 'DUPLICATE_RECORD'
   | 'REQUIRED_FIELD_MISSING'
+  // Payment-specific errors
+  | 'INVALID_BANK_ACCOUNT'
+  | 'INVALID_PAYMENT_ACCOUNT'
+  | 'INVALID_PAYMENT_METHOD'
+  | 'INVOICE_NOT_FOUND'
+  | 'INVOICE_ALREADY_PAID'
+  | 'PAYMENT_AMOUNT_EXCEEDS_DUE'
+  | 'INVALID_FINANCIAL_ENTITY'
   | 'UNKNOWN';
 
 export interface ClassifiedError {
@@ -155,6 +163,73 @@ export function classifySageError(message: string): ClassifiedError {
     };
   }
 
+  // Payment-specific errors
+
+  // Invalid bank/payment account
+  if (lower.includes('valid payment account') || 
+      lower.includes('bank account') && lower.includes('not been specified') ||
+      lower.includes('provide a valid bank account') ||
+      lower.includes('undeposited funds account')) {
+    return {
+      type: 'INVALID_PAYMENT_ACCOUNT',
+      originalMessage: message,
+      recoverable: true,
+    };
+  }
+
+  // Invalid financial entity
+  if (lower.includes('financial entity') || lower.includes('financialentity')) {
+    const match = message.match(/entity\s*['"]?([^'"]+)['"]?/i);
+    return {
+      type: 'INVALID_FINANCIAL_ENTITY',
+      extractedValue: match?.[1]?.trim(),
+      originalMessage: message,
+      recoverable: true,
+    };
+  }
+
+  // Invalid payment method
+  if (lower.includes('payment method') && (lower.includes('invalid') || lower.includes('not found'))) {
+    const match = message.match(/method\s*['"]?([^'"]+)['"]?/i);
+    return {
+      type: 'INVALID_PAYMENT_METHOD',
+      extractedValue: match?.[1]?.trim(),
+      originalMessage: message,
+      recoverable: true,
+    };
+  }
+
+  // Invoice not found / invalid record key
+  if ((lower.includes('invoice') || lower.includes('record') || lower.includes('recordkey')) && 
+      (lower.includes('not found') || lower.includes('invalid') || lower.includes('does not exist'))) {
+    const match = message.match(/(?:record|invoice|key)\s*(?:no|number)?\s*['"]?(\d+)['"]?/i);
+    return {
+      type: 'INVOICE_NOT_FOUND',
+      extractedValue: match?.[1]?.trim(),
+      originalMessage: message,
+      recoverable: false,
+    };
+  }
+
+  // Invoice already paid
+  if (lower.includes('already paid') || lower.includes('no balance') || lower.includes('balance is zero')) {
+    return {
+      type: 'INVOICE_ALREADY_PAID',
+      originalMessage: message,
+      recoverable: false,
+    };
+  }
+
+  // Payment amount exceeds due
+  if (lower.includes('exceeds') || lower.includes('overpayment') || 
+      (lower.includes('amount') && lower.includes('greater than'))) {
+    return {
+      type: 'PAYMENT_AMOUNT_EXCEEDS_DUE',
+      originalMessage: message,
+      recoverable: true,
+    };
+  }
+
   return {
     type: 'UNKNOWN',
     originalMessage: message,
@@ -179,6 +254,14 @@ export function describeErrorType(type: SageErrorType): string {
     PERMISSION_DENIED: 'Insufficient permissions',
     DUPLICATE_RECORD: 'Record already exists',
     REQUIRED_FIELD_MISSING: 'Required field is missing',
+    // Payment-specific
+    INVALID_BANK_ACCOUNT: 'Invalid or non-existent bank account',
+    INVALID_PAYMENT_ACCOUNT: 'Invalid payment account (need bank or undeposited funds account)',
+    INVALID_PAYMENT_METHOD: 'Invalid payment method',
+    INVOICE_NOT_FOUND: 'Invoice not found',
+    INVOICE_ALREADY_PAID: 'Invoice is already fully paid',
+    PAYMENT_AMOUNT_EXCEEDS_DUE: 'Payment amount exceeds amount due',
+    INVALID_FINANCIAL_ENTITY: 'Invalid financial entity',
     UNKNOWN: 'Unknown error',
   };
   return descriptions[type];
