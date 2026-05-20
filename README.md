@@ -6,7 +6,7 @@ A command-line agent that performs real ERP actions in Sage Intacct from natural
 
 - **Session Management**: Automatically handles Sage Intacct API sessions
 - **Invoice Operations**: Create, read, list invoices
-- **Customer Queries**: List and search customers
+- **Customer Queries**: List and search customers with detailed contact views
 - **GL Account Queries**: List GL accounts and account labels
 - **Learning Memory**: Remembers which combinations work in your sandbox
 - **XML Logging**: All requests/responses saved for debugging
@@ -39,49 +39,38 @@ A command-line agent that performs real ERP actions in Sage Intacct from natural
 
 ## Commands
 
-### Session & Status
+For the complete command reference, see **[CLI Commands Documentation](docs/CLI_COMMANDS.md)**.
+
+### Quick Reference
 
 ```bash
-npm run agent "session"     # Create new API session
-npm run agent "status"      # Check current session
-```
+# Session
+npm run agent "session"              # Create API session
+npm run agent "status"               # Check session status
 
-### List Records
+# List Records
+npm run agent "list customers"       # List active customers
+npm run agent "list invoices"        # List open invoices
+npm run agent "list accounts"        # List GL accounts
 
-```bash
-npm run agent "list customers"   # List active customers
-npm run agent "list invoices"    # List open invoices
-npm run agent "list accounts"    # List GL accounts
-npm run agent "list labels"      # List account labels
-```
+# Get Details
+npm run agent "get invoice INV25948" # Get invoice by ID
+npm run agent "get invoice 54284"    # Get invoice by record number
+npm run agent "get customer 10014"   # Get customer details
+npm run agent "get customer 10014 contact"        # View all contacts
+npm run agent "get customer 10014 contact BILLTO" # View bill-to contact
 
-### Get Specific Records
-
-```bash
-npm run agent "get invoice 12345"      # Get invoice by record number
-npm run agent "get customer CUST-001"  # Get customer by ID
-```
-
-### Create Invoices
-
-```bash
+# Create
 npm run agent "create invoice"
-npm run agent "create 5 invoices"
-npm run agent "create invoice for customer CUST-001"
-npm run agent "create invoice customer TEST-001 gl 4000 $250"
-```
+npm run agent "create invoice for customer 10014 gl 4000 $250"
 
-### Defaults & Memory
-
-```bash
-npm run agent "show defaults"              # View current defaults
-npm run agent "set default customer X"     # Set default customer
-npm run agent "set default account 4000"   # Set default GL account
-npm run agent "set default amount 100"     # Set default amount
+# Defaults & Learning
+npm run agent "show defaults"        # View defaults & learned knowledge
+npm run agent "set default customer 10014"
+npm run agent "reset knowledge"      # Clear learned data
 ```
 
 ## Environment Variables
-
 
 | Variable               | Description                                    |
 | ---------------------- | ---------------------------------------------- |
@@ -91,7 +80,6 @@ npm run agent "set default amount 100"     # Set default amount
 | `SAGE_USER_ID`         | API user ID                                    |
 | `SAGE_USER_PASSWORD`   | API user password                              |
 | `SAGE_LOCATION_ID`     | (Optional) Entity/location ID for multi-entity |
-
 
 ## Project Structure
 
@@ -108,6 +96,8 @@ sage-agent/
 │   │   └── store.ts        # Learning memory
 │   └── output/
 │       └── table.ts        # Console formatting
+├── docs/
+│   └── CLI_COMMANDS.md     # Full CLI documentation
 ├── data/
 │   ├── defaults.json       # User-configured defaults
 │   └── memory.json         # Learned combinations
@@ -129,17 +119,15 @@ npm run agent "show defaults"
 
 ## Roadmap
 
-- Payment operations (pay invoice, apply credits)
-- Playwright dashboard verification
-- More intelligent error recovery
-- LLM-based natural language understanding
+- [ ] Payment CLI commands (pay invoice, apply credits)
+- [ ] Get GL account details
+- [ ] Playwright dashboard verification
+- [ ] More intelligent error recovery
+- [ ] LLM-based natural language understanding
 
+## Recently Completed
 
-
-
-
-## Todo:
-
-1. Get account details
-2. Get customer details
-
+- [x] Get customer details with full information display
+- [x] Get customer contact sections (DISPLAYCONTACT, BILLTO, SHIPTO)
+- [x] Smart display that hides empty fields
+- [x] CLI documentation (`docs/CLI_COMMANDS.md`)
