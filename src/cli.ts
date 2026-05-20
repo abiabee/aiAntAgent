@@ -9,7 +9,7 @@ import {
   Invoice,
   InvoiceResult
 } from './sage/actions/invoice.js';
-import { listCustomers, getCustomer, Customer } from './sage/actions/listCustomers.js';
+import { listCustomers, getCustomer, Customer, CustomerFull, CustomerContact, CustomerAddress, CustomerEntityContact } from './sage/actions/listCustomers.js';
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
 import { formatSageErrors } from './sage/parser.js';
@@ -43,6 +43,7 @@ interface ParsedCommand {
   glAccount?: string;
   recordNo?: string;
   invoiceId?: string;  // e.g., INV25948
+  contactType?: string;  // e.g., DISPLAYCONTACT, BILLTO, SHIPTO, CONTACTINFO
   options: Record<string, string>;
 }
 
@@ -104,10 +105,18 @@ function parseCommand(input: string): ParsedCommand {
       }
     } else if (lower.includes('customer')) {
       command.action = 'get-customer';
-      // Extract customer ID
-      const match = lower.match(/customer\s+([A-Za-z0-9_-]+)/i);
-      if (match) {
-        command.customerId = match[1];
+      // Check for contact subcommand: "get customer CUSTID contact CONTACTTYPE"
+      const contactMatch = input.match(/customer\s+([A-Za-z0-9_-]+)\s+contact(?:\s+(\w+))?/i);
+      if (contactMatch) {
+        command.customerId = contactMatch[1];
+        command.contactType = contactMatch[2]?.toUpperCase() || 'ALL';
+        command.action = 'get-customer-contact';
+      } else {
+        // Extract customer ID
+        const match = input.match(/customer\s+([A-Za-z0-9_-]+)/i);
+        if (match) {
+          command.customerId = match[1];
+        }
       }
     }
     return command;
@@ -283,6 +292,469 @@ async function handleListLabels(client: SageClient): Promise<void> {
 
   console.log(createTable(result.labels as unknown as Record<string, unknown>[], columns));
   printInfo(`Found ${result.labels.length} label(s)`);
+}
+
+/**
+ * Helper to check if a value is non-empty
+ */
+function hasValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string' && value.trim() === '') return false;
+  return true;
+}
+
+/**
+ * Print key-values only for non-empty values
+ */
+function printNonEmptyKeyValues(data: Record<string, unknown>, indent = '  '): void {
+  for (const [key, value] of Object.entries(data)) {
+    if (hasValue(value)) {
+      console.log(`${indent}${chalk.gray(key + ':')} ${value}`);
+    }
+  }
+}
+
+/**
+ * Format an address for display
+ */
+function formatAddress(addr: CustomerAddress | undefined): string[] {
+  if (!addr) return [];
+  const lines: string[] = [];
+  
+  if (hasValue(addr.ADDRESS1)) lines.push(addr.ADDRESS1!);
+  if (hasValue(addr.ADDRESS2)) lines.push(addr.ADDRESS2!);
+  if (hasValue(addr.ADDRESS3)) lines.push(addr.ADDRESS3!);
+  
+  const cityStateZip: string[] = [];
+  if (hasValue(addr.CITY)) cityStateZip.push(addr.CITY!);
+  if (hasValue(addr.STATE)) cityStateZip.push(addr.STATE!);
+  if (hasValue(addr.ZIP)) cityStateZip.push(addr.ZIP!);
+  if (cityStateZip.length > 0) {
+    lines.push(cityStateZip.join(', '));
+  }
+  
+  if (hasValue(addr.COUNTRY) && addr.COUNTRY !== 'United States') {
+    lines.push(addr.COUNTRY!);
+  }
+  
+  return lines;
+}
+
+/**
+ * Display a contact section (DISPLAYCONTACT, BILLTO, SHIPTO, etc.)
+ */
+function displayContactSection(title: string, contact: CustomerContact | undefined): void {
+  if (!contact) return;
+  
+  // Check if there's any meaningful data
+  const hasData = Object.entries(contact).some(([key, value]) => {
+    if (key === 'MAILADDRESS') {
+      return contact.MAILADDRESS && formatAddress(contact.MAILADDRESS).length > 0;
+    }
+    return hasValue(value);
+  });
+  
+  if (!hasData) return;
+  
+  console.log();
+  console.log(chalk.bold.cyan(title));
+  console.log();
+  
+  // Name info
+  const nameInfo: Record<string, unknown> = {};
+  if (hasValue(contact.CONTACTNAME)) nameInfo['Contact Name'] = contact.CONTACTNAME;
+  if (hasValue(contact.COMPANYNAME)) nameInfo['Company'] = contact.COMPANYNAME;
+  if (hasValue(contact.FIRSTNAME) || hasValue(contact.LASTNAME)) {
+    const fullName = [contact.PREFIX, contact.FIRSTNAME, contact.INITIAL, contact.LASTNAME]
+      .filter(hasValue).join(' ');
+    if (fullName) nameInfo['Full Name'] = fullName;
+  }
+  if (hasValue(contact.PRINTAS)) nameInfo['Print As'] = contact.PRINTAS;
+  printNonEmptyKeyValues(nameInfo);
+  
+  // Contact details
+  const contactDetails: Record<string, unknown> = {};
+  if (hasValue(contact.EMAIL1)) contactDetails['Email'] = contact.EMAIL1;
+  if (hasValue(contact.EMAIL2)) contactDetails['Email 2'] = contact.EMAIL2;
+  if (hasValue(contact.PHONE1)) contactDetails['Phone'] = contact.PHONE1;
+  if (hasValue(contact.PHONE2)) contactDetails['Phone 2'] = contact.PHONE2;
+  if (hasValue(contact.CELLPHONE)) contactDetails['Cell'] = contact.CELLPHONE;
+  if (hasValue(contact.FAX)) contactDetails['Fax'] = contact.FAX;
+  if (hasValue(contact.URL1)) contactDetails['Website'] = contact.URL1;
+  if (hasValue(contact.URL2)) contactDetails['Website 2'] = contact.URL2;
+  if (Object.keys(contactDetails).length > 0) {
+    console.log();
+    printNonEmptyKeyValues(contactDetails);
+  }
+  
+  // Tax info
+  const taxInfo: Record<string, unknown> = {};
+  if (hasValue(contact.TAXABLE)) taxInfo['Taxable'] = contact.TAXABLE;
+  if (hasValue(contact.TAXGROUP)) taxInfo['Tax Group'] = contact.TAXGROUP;
+  if (hasValue(contact.TAXID)) taxInfo['Tax ID'] = contact.TAXID;
+  if (Object.keys(taxInfo).length > 0) {
+    console.log();
+    printNonEmptyKeyValues(taxInfo);
+  }
+  
+  // Address
+  const addressLines = formatAddress(contact.MAILADDRESS);
+  if (addressLines.length > 0) {
+    console.log();
+    console.log(chalk.gray('  Address:'));
+    for (const line of addressLines) {
+      console.log(`    ${line}`);
+    }
+  }
+}
+
+async function handleGetCustomer(
+  client: SageClient,
+  customerId: string
+): Promise<void> {
+  printHeader('Customer Details');
+  
+  if (!customerId) {
+    printError('Please specify a customer ID');
+    return;
+  }
+
+  printInfo(`Fetching customer: ${customerId}`);
+  const result = await getCustomer(client, customerId);
+  
+  if (!result.success || !result.customer) {
+    printError(result.error || 'Failed to get customer');
+    return;
+  }
+
+  const customer = result.customer;
+  
+  // Status styling
+  const statusColor = customer.STATUS === 'active' ? chalk.green :
+                      customer.STATUS === 'inactive' ? chalk.red : chalk.white;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Header
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log();
+  console.log(chalk.bold(`Customer -- ${customer.CUSTOMERID}`));
+  console.log(chalk.gray('─'.repeat(60)));
+  console.log();
+  
+  // Quick stats row
+  const statsItems = [
+    ['Name', customer.NAME || '-'],
+    ['Status', statusColor(customer.STATUS || '-')],
+    ['Terms', customer.TERMNAME || '-'],
+    ['Currency', customer.CURRENCY || 'USD'],
+    ['Total Due', customer.TOTALDUE ? formatCurrency(Number(customer.TOTALDUE)) : '-'],
+  ];
+  
+  console.log(chalk.gray(statsItems.map(i => i[0]).join('  |  ')));
+  console.log(statsItems.map(i => i[1]).join('  |  '));
+  console.log();
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Basic Information
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log(chalk.bold.cyan('Basic Information'));
+  console.log();
+  
+  const basicInfo: Record<string, unknown> = {};
+  if (hasValue(customer.RECORDNO)) basicInfo['Record No'] = customer.RECORDNO;
+  if (hasValue(customer.CUSTOMERID)) basicInfo['Customer ID'] = customer.CUSTOMERID;
+  if (hasValue(customer.NAME)) basicInfo['Name'] = customer.NAME;
+  if (hasValue(customer.ENTITY)) basicInfo['Entity'] = customer.ENTITY;
+  if (hasValue(customer.PARENTID)) basicInfo['Parent ID'] = customer.PARENTID;
+  if (hasValue(customer.PARENTNAME)) basicInfo['Parent Name'] = customer.PARENTNAME;
+  if (hasValue(customer.STATUS)) basicInfo['Status'] = statusColor(customer.STATUS!);
+  if (hasValue(customer.ONETIME) && customer.ONETIME === 'true') basicInfo['One-time'] = 'Yes';
+  if (hasValue(customer.ONHOLD) && customer.ONHOLD === 'true') basicInfo['On Hold'] = chalk.red('Yes');
+  printNonEmptyKeyValues(basicInfo);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Terms & Billing
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasTermsInfo = hasValue(customer.TERMNAME) || hasValue(customer.CREDITLIMIT) || 
+                       hasValue(customer.TOTALDUE) || hasValue(customer.DELIVERY_OPTIONS);
+  if (hasTermsInfo) {
+    console.log();
+    console.log(chalk.bold.cyan('Terms & Billing'));
+    console.log();
+    
+    const termsInfo: Record<string, unknown> = {};
+    if (hasValue(customer.TERMNAME)) termsInfo['Terms'] = customer.TERMNAME;
+    if (hasValue(customer.CURRENCY)) termsInfo['Currency'] = customer.CURRENCY;
+    if (hasValue(customer.CREDITLIMIT)) termsInfo['Credit Limit'] = formatCurrency(Number(customer.CREDITLIMIT));
+    if (hasValue(customer.TOTALDUE)) termsInfo['Total Due'] = formatCurrency(Number(customer.TOTALDUE));
+    if (hasValue(customer.DELIVERY_OPTIONS)) termsInfo['Delivery'] = customer.DELIVERY_OPTIONS;
+    printNonEmptyKeyValues(termsInfo);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Classification
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasClassification = hasValue(customer.CUSTTYPE) || hasValue(customer.GLGROUP) || 
+                           hasValue(customer.TERRITORYID) || hasValue(customer.PRICELIST);
+  if (hasClassification) {
+    console.log();
+    console.log(chalk.bold.cyan('Classification'));
+    console.log();
+    
+    const classInfo: Record<string, unknown> = {};
+    if (hasValue(customer.CUSTTYPE)) classInfo['Customer Type'] = customer.CUSTTYPE;
+    if (hasValue(customer.GLGROUP)) classInfo['GL Group'] = customer.GLGROUP;
+    if (hasValue(customer.TERRITORYID)) classInfo['Territory'] = `${customer.TERRITORYID}${customer.TERRITORYNAME ? ` - ${customer.TERRITORYNAME}` : ''}`;
+    if (hasValue(customer.SHIPPINGMETHOD)) classInfo['Shipping Method'] = customer.SHIPPINGMETHOD;
+    if (hasValue(customer.PRICELIST)) classInfo['Price List'] = customer.PRICELIST;
+    if (hasValue(customer.PRICESCHEDULE)) classInfo['Price Schedule'] = customer.PRICESCHEDULE;
+    if (hasValue(customer.DISCOUNT)) classInfo['Discount'] = customer.DISCOUNT;
+    printNonEmptyKeyValues(classInfo);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Representative
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (hasValue(customer.CUSTREPID) || hasValue(customer.CUSTREPNAME)) {
+    console.log();
+    console.log(chalk.bold.cyan('Sales Representative'));
+    console.log();
+    
+    const repInfo: Record<string, unknown> = {};
+    if (hasValue(customer.CUSTREPID)) repInfo['Rep ID'] = customer.CUSTREPID;
+    if (hasValue(customer.CUSTREPNAME)) repInfo['Rep Name'] = customer.CUSTREPNAME;
+    printNonEmptyKeyValues(repInfo);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Accounts
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasAccounts = hasValue(customer.ARACCOUNT) || hasValue(customer.ACCOUNTLABEL);
+  if (hasAccounts) {
+    console.log();
+    console.log(chalk.bold.cyan('AR Accounts'));
+    console.log();
+    
+    const accountInfo: Record<string, unknown> = {};
+    if (hasValue(customer.ARACCOUNT)) accountInfo['AR Account'] = `${customer.ARACCOUNT}${customer.ARACCOUNTTITLE ? ` - ${customer.ARACCOUNTTITLE}` : ''}`;
+    if (hasValue(customer.ACCOUNTLABEL)) accountInfo['Account Label'] = customer.ACCOUNTLABEL;
+    printNonEmptyKeyValues(accountInfo);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Payment Options
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasPaymentOptions = hasValue(customer.ENABLEONLINECARDPAYMENT) || hasValue(customer.ENABLEONLINEACHPAYMENT);
+  if (hasPaymentOptions) {
+    console.log();
+    console.log(chalk.bold.cyan('Payment Options'));
+    console.log();
+    
+    const paymentInfo: Record<string, unknown> = {};
+    if (hasValue(customer.ENABLEONLINECARDPAYMENT)) {
+      paymentInfo['Card Payment'] = customer.ENABLEONLINECARDPAYMENT === 'true' ? chalk.green('Enabled') : chalk.gray('Disabled');
+    }
+    if (hasValue(customer.ENABLEONLINEACHPAYMENT)) {
+      paymentInfo['ACH Payment'] = customer.ENABLEONLINEACHPAYMENT === 'true' ? chalk.green('Enabled') : chalk.gray('Disabled');
+    }
+    if (hasValue(customer.PAYSTAND_PAYER_ID__C)) {
+      paymentInfo['Paystand Payer ID'] = customer.PAYSTAND_PAYER_ID__C;
+    }
+    printNonEmptyKeyValues(paymentInfo);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Contact Summary (show primary contact inline)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const dc = customer.DISPLAYCONTACT;
+  if (dc && (hasValue(dc.EMAIL1) || hasValue(dc.PHONE1) || hasValue(dc.CONTACTNAME))) {
+    console.log();
+    console.log(chalk.bold.cyan('Primary Contact'));
+    console.log();
+    
+    const contactInfo: Record<string, unknown> = {};
+    if (hasValue(dc.CONTACTNAME)) contactInfo['Name'] = dc.CONTACTNAME;
+    if (hasValue(dc.COMPANYNAME) && dc.COMPANYNAME !== dc.CONTACTNAME) contactInfo['Company'] = dc.COMPANYNAME;
+    if (hasValue(dc.EMAIL1)) contactInfo['Email'] = dc.EMAIL1;
+    if (hasValue(dc.PHONE1)) contactInfo['Phone'] = dc.PHONE1;
+    printNonEmptyKeyValues(contactInfo);
+    
+    const addressLines = formatAddress(dc.MAILADDRESS);
+    if (addressLines.length > 0) {
+      console.log();
+      console.log(chalk.gray('  Address:'));
+      for (const line of addressLines) {
+        console.log(`    ${line}`);
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Dates
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasDates = hasValue(customer.LAST_INVOICEDATE) || hasValue(customer.WHENCREATED) || hasValue(customer.WHENMODIFIED);
+  if (hasDates) {
+    console.log();
+    console.log(chalk.bold.cyan('Dates'));
+    console.log();
+    
+    const dateInfo: Record<string, unknown> = {};
+    if (hasValue(customer.LAST_INVOICEDATE)) dateInfo['Last Invoice'] = customer.LAST_INVOICEDATE;
+    if (hasValue(customer.LAST_STATEMENTDATE)) dateInfo['Last Statement'] = customer.LAST_STATEMENTDATE;
+    if (hasValue(customer.WHENCREATED)) dateInfo['Created'] = customer.WHENCREATED;
+    if (hasValue(customer.WHENMODIFIED)) dateInfo['Modified'] = customer.WHENMODIFIED;
+    printNonEmptyKeyValues(dateInfo);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Entity (if multi-entity)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (hasValue(customer.MEGAENTITYNAME)) {
+    console.log();
+    console.log(chalk.bold.cyan('Entity'));
+    console.log();
+    printNonEmptyKeyValues({
+      'Entity': `${customer.MEGAENTITYID} - ${customer.MEGAENTITYNAME}`,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Comments
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (hasValue(customer.COMMENTS) || hasValue(customer.CUSTMESSAGE?.MESSAGE)) {
+    console.log();
+    console.log(chalk.bold.cyan('Notes'));
+    console.log();
+    if (hasValue(customer.COMMENTS)) {
+      console.log(`  ${customer.COMMENTS}`);
+    }
+    if (hasValue(customer.CUSTMESSAGE?.MESSAGE)) {
+      console.log(`  ${chalk.gray('Message:')} ${customer.CUSTMESSAGE!.MESSAGE}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Footer / Audit
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log();
+  console.log(chalk.gray('─'.repeat(60)));
+  const auditParts = [`Record No: ${customer.RECORDNO || '-'}`];
+  if (hasValue(customer.CREATEDBYLOGINID)) auditParts.push(`Created by: ${customer.CREATEDBYLOGINID}`);
+  if (hasValue(customer.MODIFIEDBYLOGINID)) auditParts.push(`Modified by: ${customer.MODIFIEDBYLOGINID}`);
+  console.log(chalk.gray(auditParts.join(' | ')));
+  
+  console.log();
+  printInfo(`For contact details, use: get customer ${customerId} contact`);
+}
+
+async function handleGetCustomerContact(
+  client: SageClient,
+  customerId: string,
+  contactType: string
+): Promise<void> {
+  printHeader(`Customer Contact Details`);
+  
+  if (!customerId) {
+    printError('Please specify a customer ID');
+    return;
+  }
+
+  printInfo(`Fetching customer: ${customerId}`);
+  const result = await getCustomer(client, customerId);
+  
+  if (!result.success || !result.customer) {
+    printError(result.error || 'Failed to get customer');
+    return;
+  }
+
+  const customer = result.customer;
+  
+  console.log();
+  console.log(chalk.bold(`Customer ${customer.CUSTOMERID} - ${customer.NAME}`));
+  console.log(chalk.gray('─'.repeat(60)));
+  
+  const validTypes = ['DISPLAYCONTACT', 'BILLTO', 'SHIPTO', 'CONTACTINFO', 'ALL', 'CONTACTS'];
+  const upperType = contactType.toUpperCase();
+  
+  if (!validTypes.includes(upperType)) {
+    printError(`Unknown contact type: ${contactType}`);
+    console.log();
+    printInfo('Available contact types:');
+    printInfo('  DISPLAYCONTACT  - Primary display contact');
+    printInfo('  BILLTO          - Bill-to contact');
+    printInfo('  SHIPTO          - Ship-to contact');
+    printInfo('  CONTACTINFO     - Contact information');
+    printInfo('  CONTACTS        - All customer entity contacts');
+    printInfo('  ALL             - Show all contact sections');
+    return;
+  }
+
+  // Display the requested contact section(s)
+  if (upperType === 'ALL' || upperType === 'DISPLAYCONTACT') {
+    displayContactSection('Display Contact', customer.DISPLAYCONTACT);
+  }
+  
+  if (upperType === 'ALL' || upperType === 'BILLTO') {
+    displayContactSection('Bill To', customer.BILLTO);
+  }
+  
+  if (upperType === 'ALL' || upperType === 'SHIPTO') {
+    displayContactSection('Ship To', customer.SHIPTO);
+  }
+  
+  if (upperType === 'ALL' || upperType === 'CONTACTINFO') {
+    displayContactSection('Contact Info', customer.CONTACTINFO);
+  }
+  
+  // Customer Entity Contacts list
+  if (upperType === 'ALL' || upperType === 'CONTACTS') {
+    const entityContacts = customer.CUSTOMERCONTACTS?.customerentitycontacts;
+    if (entityContacts) {
+      const contacts = Array.isArray(entityContacts) ? entityContacts : [entityContacts];
+      
+      if (contacts.length > 0) {
+        console.log();
+        console.log(chalk.bold.cyan(`Customer Contacts (${contacts.length})`));
+        console.log();
+        
+        for (const contact of contacts) {
+          const isPrimary = contact.ISPRIMARY === 'true';
+          const isBillTo = contact.ISBILLTOPAYTO === 'true';
+          const isShipTo = contact.ISSHIPTORETURNTO === 'true';
+          
+          const badges: string[] = [];
+          if (isPrimary) badges.push(chalk.green('Primary'));
+          if (isBillTo) badges.push(chalk.blue('Bill-To'));
+          if (isShipTo) badges.push(chalk.yellow('Ship-To'));
+          
+          const badgeStr = badges.length > 0 ? ` [${badges.join(', ')}]` : '';
+          
+          console.log(`  ${chalk.bold(contact.CONTACTNAME || contact.CONTACT?.NAME || '-')}${badgeStr}`);
+          if (hasValue(contact.CATEGORYNAME)) {
+            console.log(`    ${chalk.gray('Category:')} ${contact.CATEGORYNAME}`);
+          }
+          if (hasValue(contact.RECORDNO)) {
+            console.log(`    ${chalk.gray('Record No:')} ${contact.RECORDNO}`);
+          }
+          console.log();
+        }
+      }
+    }
+  }
+  
+  // If specific type was requested and nothing was found
+  if (upperType !== 'ALL' && upperType !== 'CONTACTS') {
+    const contactMap: Record<string, CustomerContact | undefined> = {
+      'DISPLAYCONTACT': customer.DISPLAYCONTACT,
+      'BILLTO': customer.BILLTO,
+      'SHIPTO': customer.SHIPTO,
+      'CONTACTINFO': customer.CONTACTINFO,
+    };
+    
+    if (!contactMap[upperType]) {
+      printInfo(`No ${contactType} information found for this customer`);
+    }
+  }
 }
 
 async function handleGetInvoice(
@@ -796,7 +1268,11 @@ function showHelp(): void {
   console.log(chalk.bold('Get Specific Records:'));
   console.log('  get invoice INV25948         Get invoice by Invoice ID');
   console.log('  get invoice 54284            Get invoice by record number');
-  console.log('  get customer CUST-001        Get customer by ID');
+  console.log('  get customer 10014           Get customer details by ID');
+  console.log('  get customer 10014 contact   View all contact sections');
+  console.log('  get customer 10014 contact DISPLAYCONTACT');
+  console.log('  get customer 10014 contact BILLTO');
+  console.log('  get customer 10014 contact SHIPTO');
   console.log();
 
   console.log(chalk.bold('Create Invoices:'));
@@ -910,6 +1386,28 @@ async function main(): Promise<void> {
         return;
       }
       await handleGetInvoice(client, { recordNo: cmd.recordNo, invoiceId: cmd.invoiceId });
+      break;
+
+    case 'get-customer':
+      if (!cmd.customerId) {
+        printError('Please specify a customer ID:');
+        printInfo('  get customer 10014       (by Customer ID)');
+        printInfo('  get customer CUST-001    (by Customer ID)');
+        return;
+      }
+      await handleGetCustomer(client, cmd.customerId);
+      break;
+
+    case 'get-customer-contact':
+      if (!cmd.customerId) {
+        printError('Please specify a customer ID:');
+        printInfo('  get customer 10014 contact              (all contacts)');
+        printInfo('  get customer 10014 contact DISPLAYCONTACT');
+        printInfo('  get customer 10014 contact BILLTO');
+        printInfo('  get customer 10014 contact SHIPTO');
+        return;
+      }
+      await handleGetCustomerContact(client, cmd.customerId, cmd.contactType || 'ALL');
       break;
 
     case 'create-invoice':
