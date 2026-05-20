@@ -1,5 +1,14 @@
 import { SageClient } from '../client.js';
-import { queryCustomersTemplate, QueryCustomersData, readCustomerTemplate, ReadCustomerData } from '../templates/customer.js';
+import { 
+  queryCustomersTemplate, 
+  readCustomerTemplate,
+  searchCustomerTemplate,
+} from '../templates/customer.js';
+import type { 
+  QueryCustomersData, 
+  ReadCustomerData,
+  SearchCustomerData,
+} from '../templates/customer.js';
 import { extractData, ensureArray } from '../parser.js';
 
 export interface CustomerAddress {
@@ -219,5 +228,43 @@ export async function getCustomer(
   return {
     success: true,
     customer: Array.isArray(customer) ? customer[0] : customer,
+  };
+}
+
+export interface SearchCustomersResult {
+  success: boolean;
+  customers: Customer[];
+  error?: string;
+}
+
+/**
+ * Search customers by name (partial match)
+ */
+export async function searchCustomers(
+  client: SageClient,
+  searchTerm: string,
+  options: { pageSize?: number } = {}
+): Promise<SearchCustomersResult> {
+  const data: SearchCustomerData = {
+    searchTerm,
+    pageSize: options.pageSize || 20,
+  };
+
+  const response = await client.execute(searchCustomerTemplate, data, 'searchCustomers');
+
+  if (!response.success) {
+    return {
+      success: false,
+      customers: [],
+      error: response.error?.description || 'Failed to search customers',
+    };
+  }
+
+  const rawCustomers = extractData<Customer>(response, 'CUSTOMER');
+  const customers = ensureArray(rawCustomers);
+
+  return {
+    success: true,
+    customers,
   };
 }

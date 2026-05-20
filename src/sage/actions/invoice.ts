@@ -1,18 +1,25 @@
 import { SageClient } from '../client.js';
 import { 
   readInvoiceTemplate, 
-  ReadInvoiceData,
   queryInvoiceByIdTemplate,
-  QueryInvoiceByIdData,
   queryOpenInvoicesTemplate,
-  QueryOpenInvoicesData,
   createInvoiceTemplate,
+  deleteInvoiceTemplate,
+  queryInvoicesByCustomerTemplate,
+  queryMultipleInvoicesTemplate,
+} from '../templates/invoice.js';
+import type {
+  ReadInvoiceData,
+  QueryInvoiceByIdData,
+  QueryOpenInvoicesData,
   CreateInvoiceData,
   InvoiceLineItem,
-  deleteInvoiceTemplate,
-  DeleteInvoiceData
+  DeleteInvoiceData,
+  QueryInvoicesByCustomerData,
+  QueryMultipleInvoicesData,
 } from '../templates/invoice.js';
-import { extractData, ensureArray, SageResponse } from '../parser.js';
+import { extractData, ensureArray } from '../parser.js';
+import type { SageResponse } from '../parser.js';
 
 export interface InvoiceLineItemData {
   RECORDNO: string;
@@ -352,4 +359,64 @@ export async function deleteInvoice(
   }
 
   return { success: true };
+}
+
+/**
+ * List invoices for a specific customer
+ */
+export async function listInvoicesByCustomer(
+  client: SageClient,
+  customerId: string,
+  options: { pageSize?: number } = {}
+): Promise<InvoicesResult> {
+  const data: QueryInvoicesByCustomerData = {
+    customerId,
+    pageSize: options.pageSize || 50,
+  };
+
+  const response = await client.execute(queryInvoicesByCustomerTemplate, data, 'listInvoicesByCustomer');
+
+  if (!response.success) {
+    return {
+      success: false,
+      invoices: [],
+      error: response.error?.description || 'Failed to list invoices for customer',
+    };
+  }
+
+  const rawInvoices = extractData<Invoice>(response, 'ARINVOICE');
+  const invoices = ensureArray(rawInvoices);
+
+  return {
+    success: true,
+    invoices,
+  };
+}
+
+/**
+ * Get multiple invoices by their Invoice IDs (RECORDID)
+ */
+export async function getMultipleInvoices(
+  client: SageClient,
+  invoiceIds: string[]
+): Promise<InvoicesResult> {
+  const data: QueryMultipleInvoicesData = { invoiceIds };
+
+  const response = await client.execute(queryMultipleInvoicesTemplate, data, 'getMultipleInvoices');
+
+  if (!response.success) {
+    return {
+      success: false,
+      invoices: [],
+      error: response.error?.description || 'Failed to get invoices',
+    };
+  }
+
+  const rawInvoices = extractData<Invoice>(response, 'ARINVOICE');
+  const invoices = ensureArray(rawInvoices);
+
+  return {
+    success: true,
+    invoices,
+  };
 }

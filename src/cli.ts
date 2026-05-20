@@ -5,11 +5,13 @@ import { createClientFromEnv, SageClient } from './sage/client.js';
 import { 
   getInvoice, 
   queryInvoiceById, 
-  listOpenInvoices, 
-  Invoice,
-  InvoiceResult
+  listOpenInvoices,
+  listInvoicesByCustomer,
+  getMultipleInvoices,
 } from './sage/actions/invoice.js';
-import { listCustomers, getCustomer, Customer, CustomerFull, CustomerContact, CustomerAddress, CustomerEntityContact } from './sage/actions/listCustomers.js';
+import type { Invoice, InvoiceResult } from './sage/actions/invoice.js';
+import { listCustomers, getCustomer, searchCustomers } from './sage/actions/listCustomers.js';
+import type { Customer, CustomerFull, CustomerContact, CustomerAddress, CustomerEntityContact } from './sage/actions/listCustomers.js';
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { listAllBankAccounts, BankAccount } from './sage/actions/bankAccount.js';
 import { listPayments, getPayment, Payment, PaymentFull, PaymentDetail } from './sage/actions/payment.js';
@@ -43,10 +45,12 @@ interface ParsedCommand {
   target?: string;
   count?: number;
   customerId?: string;
+  customerName?: string;  // For searching by name
   amount?: number;
   glAccount?: string;
   recordNo?: string;
   invoiceId?: string;  // e.g., INV25948
+  invoiceIds?: string[];  // Multiple invoice IDs: INV1, INV2, INV3
   contactType?: string;  // e.g., DISPLAYCONTACT, BILLTO, SHIPTO, CONTACTINFO
   paymentRecordNo?: string;
   paymentMethod?: string;
@@ -107,6 +111,25 @@ function parseCommand(input: string): ParsedCommand {
   // Get/fetch specific record
   if (lower.includes('get') || lower.includes('fetch') || lower.includes('read')) {
     if (lower.includes('invoice')) {
+      // Check for "get invoices for customer X" first
+      const forCustomerMatch = input.match(/invoices?\s+(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+      if (forCustomerMatch) {
+        command.action = 'get-invoices-for-customer';
+        command.customerId = forCustomerMatch[1];
+        return command;
+      }
+      
+      // Check for multiple invoices: "get invoices INV1, INV2, INV3"
+      const multipleMatch = input.match(/invoices?\s+((?:INV\d+(?:\s*,\s*)?)+)/i);
+      if (multipleMatch) {
+        const ids = multipleMatch[1].split(/\s*,\s*/).map(id => id.trim().toUpperCase());
+        if (ids.length > 1) {
+          command.action = 'get-invoices-multiple';
+          command.invoiceIds = ids;
+          return command;
+        }
+      }
+      
       command.action = 'get-invoice';
       // Extract invoice ID (e.g., INV25948) or record number
       const invoiceIdMatch = input.match(/(?:invoice\s+)?(INV\d+)/i);
@@ -135,10 +158,19 @@ function parseCommand(input: string): ParsedCommand {
         command.contactType = contactMatch[2]?.toUpperCase() || 'ALL';
         command.action = 'get-customer-contact';
       } else {
-        // Extract customer ID
-        const match = input.match(/customer\s+([A-Za-z0-9_-]+)/i);
-        if (match) {
-          command.customerId = match[1];
+        // Check if it looks like a name (contains spaces or starts with quote)
+        const nameMatch = input.match(/customer\s+["']([^"']+)["']/i) ||
+                          input.match(/customer\s+(.+)$/i);
+        if (nameMatch) {
+          const value = nameMatch[1].trim();
+          // If it looks like an ID (alphanumeric, no spaces, reasonable length)
+          if (/^[A-Za-z0-9_-]+$/.test(value) && value.length <= 20) {
+            command.customerId = value;
+          } else {
+            // Treat as a name search
+            command.action = 'search-customer';
+            command.customerName = value;
+          }
         }
       }
     }
@@ -199,11 +231,19 @@ function parseCommand(input: string): ParsedCommand {
       command.customerId = customerMatch[1];
     }
 
-    // Extract amount: "$100" or "100 dollars" or "amount 100"
+    // Extract amount: "$100" or "100 dollars" or "amount 100" or just a decimal after customer ID
+    // Note: Shell may interpret $X as variable, so also look for patterns like "858.6" at end
     // Must have $ prefix or "dollars" suffix or "amount" prefix to distinguish from count
-    const amountMatch = lower.match(/\$([\d.]+)|(\d+\.?\d*)\s*dollars?|amount\s+([\d.]+)/i);
+    const amountMatch = input.match(/\$([\d.]+)|(\d+\.?\d*)\s*dollars?|amount\s+([\d.]+)/i);
     if (amountMatch) {
       command.amount = parseFloat(amountMatch[1] || amountMatch[2] || amountMatch[3]);
+    } else {
+      // Fallback: look for a decimal number at the end that's not the customer ID or count
+      // Pattern: after customer ID, look for a standalone decimal number
+      const fallbackMatch = input.match(/customer\s+[A-Za-z0-9_-]+\s+(\d+\.\d+)\s*$/i);
+      if (fallbackMatch) {
+        command.amount = parseFloat(fallbackMatch[1]);
+      }
     }
 
     // Extract GL account
@@ -306,6 +346,98 @@ async function handleListCustomers(client: SageClient): Promise<void> {
 
   console.log(createTable(result.customers, customerColumns));
   printInfo(`Found ${result.customers.length} customer(s)`);
+}
+
+async function handleSearchCustomer(client: SageClient, searchTerm: string): Promise<void> {
+  printHeader(`Search Customers: "${searchTerm}"`);
+  
+  const result = await searchCustomers(client, searchTerm, { pageSize: 20 });
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to search customers');
+    return;
+  }
+
+  if (result.customers.length === 0) {
+    printInfo('No customers found matching that name');
+    return;
+  }
+
+  console.log(createTable(result.customers, customerColumns));
+  printInfo(`Found ${result.customers.length} customer(s)`);
+  
+  if (result.customers.length === 1) {
+    console.log();
+    printInfo(`To view details: get customer ${result.customers[0].CUSTOMERID}`);
+  }
+}
+
+async function handleGetInvoicesForCustomer(client: SageClient, customerId: string): Promise<void> {
+  printHeader(`Invoices for Customer ${customerId}`);
+  
+  const result = await listInvoicesByCustomer(client, customerId, { pageSize: 50 });
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to list invoices');
+    return;
+  }
+
+  if (result.invoices.length === 0) {
+    printInfo(`No invoices found for customer ${customerId}`);
+    return;
+  }
+
+  const columns = [
+    { key: 'RECORDID', header: 'Invoice ID', width: 15, format: formatRaw },
+    { key: 'WHENCREATED', header: 'Date', width: 12 },
+    { key: 'WHENPOSTED', header: 'GL Posted', width: 12 },
+    { key: 'TRX_TOTALENTERED', header: 'Amount', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'TRX_TOTALDUE', header: 'Due', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'STATE', header: 'Status', width: 15, format: formatStatus },
+    { key: 'MEGAENTITYID', header: 'Entity', width: 10 },
+  ];
+
+  console.log(createTable(result.invoices as unknown as Record<string, unknown>[], columns));
+  printInfo(`Found ${result.invoices.length} invoice(s)`);
+}
+
+async function handleGetMultipleInvoices(client: SageClient, invoiceIds: string[]): Promise<void> {
+  printHeader(`Invoices: ${invoiceIds.join(', ')}`);
+  
+  const result = await getMultipleInvoices(client, invoiceIds);
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to get invoices');
+    return;
+  }
+
+  if (result.invoices.length === 0) {
+    printInfo('No invoices found');
+    return;
+  }
+
+  // Show summary table with customer info
+  const columns = [
+    { key: 'RECORDID', header: 'Invoice ID', width: 15, format: formatRaw },
+    { key: 'CUSTOMERID', header: 'Customer', width: 15, format: formatRaw },
+    { key: 'CUSTOMERNAME', header: 'Customer Name', width: 20 },
+    { key: 'WHENCREATED', header: 'Date', width: 12 },
+    { key: 'WHENPOSTED', header: 'GL Posted', width: 12 },
+    { key: 'TRX_TOTALENTERED', header: 'Amount', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'STATE', header: 'Status', width: 12, format: formatStatus },
+    { key: 'MEGAENTITYID', header: 'Entity', width: 10 },
+  ];
+
+  console.log(createTable(result.invoices as unknown as Record<string, unknown>[], columns));
+  printInfo(`Found ${result.invoices.length} of ${invoiceIds.length} invoice(s)`);
+  
+  // List any not found
+  const foundIds = result.invoices.map(inv => inv.RECORDID);
+  const notFound = invoiceIds.filter(id => !foundIds.includes(id));
+  if (notFound.length > 0) {
+    console.log();
+    printInfo(chalk.yellow(`Not found: ${notFound.join(', ')}`));
+  }
 }
 
 async function handleListAccounts(client: SageClient): Promise<void> {
@@ -1648,7 +1780,10 @@ function showHelp(): void {
   console.log(chalk.bold('Get Specific Records:'));
   console.log('  get invoice INV25948         Get invoice by Invoice ID');
   console.log('  get invoice 54284            Get invoice by record number');
+  console.log('  get invoices INV1, INV2      Get multiple invoices (summary)');
+  console.log('  get invoices for customer X  List all invoices for customer');
   console.log('  get customer 10014           Get customer details by ID');
+  console.log('  get customer "Acme Corp"     Search customer by name');
   console.log('  get customer 10014 contact   View all contact sections');
   console.log('  get payment 12345            Get payment by record number');
   console.log();
@@ -1680,7 +1815,10 @@ function showHelp(): void {
   console.log(chalk.bold('Examples:'));
   console.log(chalk.gray('  npm run agent "session"'));
   console.log(chalk.gray('  npm run agent "list customers"'));
-  console.log(chalk.gray('  npm run agent "create invoice for customer TEST-001 gl 4000 $250"'));
+  console.log(chalk.gray('  npm run agent "get customer \\"Acme Corp\\""'));
+  console.log(chalk.gray('  npm run agent "get invoices for customer 28008"'));
+  console.log(chalk.gray('  npm run agent "get invoices INV001, INV002, INV003"'));
+  console.log(chalk.gray('  npm run agent "create 3 invoices for customer 28008 amount 858.6"'));
 }
 
 // =============================================================================
@@ -1795,6 +1933,34 @@ async function main(): Promise<void> {
         return;
       }
       await handleGetCustomerContact(client, cmd.customerId, cmd.contactType || 'ALL');
+      break;
+
+    case 'search-customer':
+      if (!cmd.customerName) {
+        printError('Please specify a customer name to search:');
+        printInfo('  get customer "Acme Corp"');
+        printInfo('  get customer Smith');
+        return;
+      }
+      await handleSearchCustomer(client, cmd.customerName);
+      break;
+
+    case 'get-invoices-for-customer':
+      if (!cmd.customerId) {
+        printError('Please specify a customer ID:');
+        printInfo('  get invoices for customer 10014');
+        return;
+      }
+      await handleGetInvoicesForCustomer(client, cmd.customerId);
+      break;
+
+    case 'get-invoices-multiple':
+      if (!cmd.invoiceIds || cmd.invoiceIds.length === 0) {
+        printError('Please specify invoice IDs:');
+        printInfo('  get invoices INV001, INV002, INV003');
+        return;
+      }
+      await handleGetMultipleInvoices(client, cmd.invoiceIds);
       break;
 
     case 'create-invoice':

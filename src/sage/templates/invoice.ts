@@ -94,6 +94,93 @@ export interface QueryOpenInvoicesData {
 }
 
 /**
+ * Query Invoices by Customer ID
+ * Lists all invoices for a specific customer
+ */
+export const queryInvoicesByCustomerTemplate = `
+<query>
+  <object>ARINVOICE</object>
+  <select>
+    <field>RECORDNO</field>
+    <field>RECORDID</field>
+    <field>CUSTOMERID</field>
+    <field>CUSTOMERNAME</field>
+    <field>TOTALENTERED</field>
+    <field>TOTALPAID</field>
+    <field>TOTALDUE</field>
+    <field>TRX_TOTALENTERED</field>
+    <field>TRX_TOTALPAID</field>
+    <field>TRX_TOTALDUE</field>
+    <field>STATE</field>
+    <field>CURRENCY</field>
+    <field>WHENCREATED</field>
+    <field>WHENDUE</field>
+    <field>WHENPOSTED</field>
+    <field>MEGAENTITYID</field>
+    <field>MEGAENTITYNAME</field>
+    <field>DESCRIPTION</field>
+  </select>
+  <filter>
+    <equalto>
+      <field>CUSTOMERID</field>
+      <value>{{customerId}}</value>
+    </equalto>
+  </filter>
+  <orderby>
+    <order>
+      <field>WHENCREATED</field>
+      <descending/>
+    </order>
+  </orderby>
+  <pagesize>{{pageSize}}</pagesize>
+</query>`;
+
+export interface QueryInvoicesByCustomerData {
+  customerId: string;
+  pageSize?: number;
+}
+
+/**
+ * Query Multiple Invoices by Record IDs
+ * Fetches specific invoices by their Invoice IDs (RECORDID)
+ */
+export const queryMultipleInvoicesTemplate = `
+<query>
+  <object>ARINVOICE</object>
+  <select>
+    <field>RECORDNO</field>
+    <field>RECORDID</field>
+    <field>CUSTOMERID</field>
+    <field>CUSTOMERNAME</field>
+    <field>TOTALENTERED</field>
+    <field>TOTALPAID</field>
+    <field>TOTALDUE</field>
+    <field>TRX_TOTALENTERED</field>
+    <field>TRX_TOTALPAID</field>
+    <field>TRX_TOTALDUE</field>
+    <field>STATE</field>
+    <field>CURRENCY</field>
+    <field>WHENCREATED</field>
+    <field>WHENDUE</field>
+    <field>WHENPOSTED</field>
+    <field>MEGAENTITYID</field>
+    <field>MEGAENTITYNAME</field>
+  </select>
+  <filter>
+    <in>
+      <field>RECORDID</field>
+      {{#each invoiceIds}}
+      <value>{{this}}</value>
+      {{/each}}
+    </in>
+  </filter>
+</query>`;
+
+export interface QueryMultipleInvoicesData {
+  invoiceIds: string[];
+}
+
+/**
  * Create AR Invoice
  * Creates a new accounts receivable invoice
  */

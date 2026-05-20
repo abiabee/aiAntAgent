@@ -1,10 +1,10 @@
 {
   "invoice": {
     "workingDefaults": {
-      "customerId": "10014",
+      "customerId": "25183",
       "currency": "USD",
       "glAccountNo": 60600,
-      "locationId": 110,
+      "locationId": 700,
       "departmentId": 100
     },
     "badValues": {
@@ -12,7 +12,9 @@
       "glAccountNos": [
         "10100"
       ],
-      "locationIds": [],
+      "locationIds": [
+        110
+      ],
       "departmentIds": []
     },
     "successfulCombos": [
@@ -159,6 +161,99 @@
         "locationId": 110,
         "departmentId": 100,
         "createdAt": "2026-05-20T18:33:18.409Z"
+      },
+      {
+        "customerId": "10014",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:06:02.225Z"
+      },
+      {
+        "customerId": "10014",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:06:05.415Z"
+      },
+      {
+        "customerId": "10014",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:06:08.356Z"
+      },
+      {
+        "customerId": "10001",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:07:56.939Z"
+      },
+      {
+        "customerId": "10001",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:08:00.070Z"
+      },
+      {
+        "customerId": "10001",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:08:02.495Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:39:21.589Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:39:40.911Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:40:16.548Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:40:25.548Z"
+      },
+      {
+        "customerId": "28008",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:40:27.684Z"
+      },
+      {
+        "customerId": "25183",
+        "glAccountNo": 60600,
+        "currency": "USD",
+        "locationId": 700,
+        "departmentId": 100,
+        "createdAt": "2026-05-20T20:43:30.096Z"
       }
     ]
   },
@@ -182,5 +277,5 @@
       }
     ]
   },
-  "lastUpdated": "2026-05-20T19:06:40.595Z"
+  "lastUpdated": "2026-05-20T20:43:30.096Z"
 }
