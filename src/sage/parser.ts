@@ -14,6 +14,7 @@ export interface SageResponse {
   sessionId?: string;
   endpoint?: string;
   data?: unknown;
+  key?: string;  // For create operations that return a key
   error?: SageError;
   rawXml?: string;
 }
@@ -121,12 +122,16 @@ export function parseResponse(xmlString: string): SageResponse {
     resultSessionId = data.api.sessionid;
   }
 
+  // For create operations, extract the key (record number of created object)
+  const key = firstResult.key ? String(firstResult.key) : undefined;
+
   return {
     success: true,
     controlId: firstResult.controlid,
     sessionId: resultSessionId || sessionId,
     endpoint,
     data,
+    key,
     rawXml: xmlString,
   };
 }

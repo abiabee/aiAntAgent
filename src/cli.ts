@@ -90,8 +90,8 @@ function parseCommand(input: string): ParsedCommand {
     return command;
   }
 
-  // List commands
-  if (lower.includes('list') || lower.includes('show') || lower.includes('get')) {
+  // List commands - only for "list" and "show", NOT "get" (get is handled separately below)
+  if ((lower.includes('list') || lower.includes('show')) && !lower.includes('get')) {
     // Note: order matters here - check more specific matches first
     // Credit memos - must check before adjustments since credit memos are a type of adjustment
     if (lower.includes('credit') && (lower.includes('memo') || lower.includes('memos'))) {
@@ -144,6 +144,23 @@ function parseCommand(input: string): ParsedCommand {
 
   // Get/fetch specific record
   if (lower.includes('get') || lower.includes('fetch') || lower.includes('read')) {
+    // Credit memos - "get creditmemos for customer X"
+    if (lower.includes('credit') && (lower.includes('memo') || lower.includes('memos'))) {
+      command.action = 'list-creditmemos';
+      const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+      if (customerMatch) {
+        command.customerId = customerMatch[1];
+      }
+      // Extract state filter
+      const stateMatch = input.match(/(?:status|state)\s+(paid|posted|submitted|draft)/i) ||
+                         input.match(/\b(paid|posted|submitted)\b(?!\s+customer)/i);
+      if (stateMatch) {
+        const stateValue = stateMatch[1].toLowerCase();
+        command.state = stateValue.charAt(0).toUpperCase() + stateValue.slice(1);
+      }
+      return command;
+    }
+
     if (lower.includes('invoice')) {
       // Check for "get invoices for customer X" first
       const forCustomerMatch = input.match(/invoices?\s+(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
