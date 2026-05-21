@@ -15,8 +15,8 @@ import type { Customer, CustomerFull, CustomerContact, CustomerAddress, Customer
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { listAllBankAccounts, BankAccount } from './sage/actions/bankAccount.js';
 import { listPayments, getPayment, Payment, PaymentFull, PaymentDetail } from './sage/actions/payment.js';
-import { listArAdjustments, getArAdjustment, queryArAdjustmentById } from './sage/actions/aradjustment.js';
-import type { ArAdjustment } from './sage/actions/aradjustment.js';
+import { listArAdjustments, getArAdjustment, queryArAdjustmentById, createArAdjustment, listCreditMemos, createCreditMemo } from './sage/actions/aradjustment.js';
+import type { ArAdjustment, CreateArAdjustmentResult } from './sage/actions/aradjustment.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
 import { formatSageErrors } from './sage/parser.js';
 import { createInvoiceWithLearning, LearningAttempt } from './sage/learningInvoice.js';
@@ -59,6 +59,9 @@ interface ParsedCommand {
   bankAccountId?: string;
   adjustmentId?: string;  // e.g., ADJ-001
   adjustmentRecordNo?: string;
+  invoiceNo?: string;  // For linking adjustment to an invoice
+  description?: string;
+  state?: string;  // For filtering by status: Paid, Posted, Submitted
   options: Record<string, string>;
 }
 
@@ -88,16 +91,35 @@ function parseCommand(input: string): ParsedCommand {
   }
 
   // List commands
-  if (lower.includes('list') || lower.includes('show')) {
+  if (lower.includes('list') || lower.includes('show') || lower.includes('get')) {
     // Note: order matters here - check more specific matches first
-    if (lower.includes('adjustment') || lower.includes('advance')) {
+    // Credit memos - must check before adjustments since credit memos are a type of adjustment
+    if (lower.includes('credit') && (lower.includes('memo') || lower.includes('memos'))) {
+      command.action = 'list-creditmemos';
+      const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+      if (customerMatch) {
+        command.customerId = customerMatch[1];
+      }
+      // Extract state filter: "status paid", "state posted", "paid", "posted"
+      const stateMatch = input.match(/(?:status|state)\s+(paid|posted|submitted|draft)/i) ||
+                         input.match(/\b(paid|posted|submitted)\b(?!\s+customer)/i);
+      if (stateMatch) {
+        // Capitalize first letter for Sage API
+        const stateValue = stateMatch[1].toLowerCase();
+        command.state = stateValue.charAt(0).toUpperCase() + stateValue.slice(1);
+      }
+      return command;
+    }
+    
+    if ((lower.includes('adjustment') || lower.includes('advance')) && 
+        !lower.includes('get') && !lower.includes('fetch')) {
       command.action = 'list-adjustments';
       // Check for "for customer X" filter
       const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
       if (customerMatch) {
         command.customerId = customerMatch[1];
       }
-    } else if (lower.includes('payment')) {
+    } else if (lower.includes('payment') && !lower.includes('get') && !lower.includes('fetch')) {
       command.action = 'list-payments';
       // Check for "for customer X" filter
       const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
@@ -283,6 +305,103 @@ function parseCommand(input: string): ParsedCommand {
     const glMatch = input.match(/(?:gl|account)\s*#?\s*([A-Za-z0-9_-]+)/i);
     if (glMatch) {
       command.glAccount = glMatch[1];
+    }
+
+    return command;
+  }
+
+  // Create AR adjustment: "create 5 aradjustments for customer CUST-001"
+  if (lower.includes('create') && (lower.includes('adjustment') || lower.includes('aradjustment'))) {
+    command.action = 'create-adjustment';
+    
+    // Extract count: "create 5 adjustments"
+    const countMatch = lower.match(/create\s+(\d+)\s+(?:ar)?adjustment/i);
+    if (countMatch) {
+      command.count = parseInt(countMatch[1], 10);
+    } else {
+      command.count = 1;
+    }
+
+    // Extract customer: "for customer X" or "customer X"
+    const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+    if (customerMatch) {
+      command.customerId = customerMatch[1];
+    }
+
+    // Extract amount: "$100" or "amount 100"
+    const amountMatch = input.match(/\$([\d.]+)|amount\s+([\d.]+)/i);
+    if (amountMatch) {
+      command.amount = parseFloat(amountMatch[1] || amountMatch[2]);
+    } else {
+      // Fallback: look for a decimal number at the end
+      const fallbackMatch = input.match(/customer\s+[A-Za-z0-9_-]+\s+(\d+\.?\d*)\s*$/i);
+      if (fallbackMatch) {
+        command.amount = parseFloat(fallbackMatch[1]);
+      }
+    }
+
+    // Extract invoice number: "invoice INV12345" or "for invoice INV12345"
+    const invoiceMatch = input.match(/(?:for\s+)?invoice\s+(INV[A-Za-z0-9_-]+|\d+)/i);
+    if (invoiceMatch) {
+      command.invoiceNo = invoiceMatch[1];
+    }
+
+    // Extract GL account
+    const glMatch = input.match(/(?:gl|account)\s*#?\s*([A-Za-z0-9_-]+)/i);
+    if (glMatch) {
+      command.glAccount = glMatch[1];
+    }
+
+    // Extract description
+    const descMatch = input.match(/description\s+["']([^"']+)["']/i) ||
+                      input.match(/desc\s+["']([^"']+)["']/i);
+    if (descMatch) {
+      command.description = descMatch[1];
+    }
+
+    return command;
+  }
+
+  // Create credit memo: "create 5 creditmemos for customer CUST-001"
+  if (lower.includes('create') && lower.includes('credit') && (lower.includes('memo') || lower.includes('memos'))) {
+    command.action = 'create-creditmemo';
+    
+    // Extract count: "create 5 credit memos"
+    const countMatch = lower.match(/create\s+(\d+)\s+credit/i);
+    if (countMatch) {
+      command.count = parseInt(countMatch[1], 10);
+    } else {
+      command.count = 1;
+    }
+
+    // Extract customer: "for customer X" or "customer X"
+    const customerMatch = input.match(/(?:for\s+)?customer\s+([A-Za-z0-9_-]+)/i);
+    if (customerMatch) {
+      command.customerId = customerMatch[1];
+    }
+
+    // Extract amount: "$100" or "amount 100" (will be negated automatically)
+    const amountMatch = input.match(/\$([\d.]+)|amount\s+([\d.]+)/i);
+    if (amountMatch) {
+      command.amount = parseFloat(amountMatch[1] || amountMatch[2]);
+    } else {
+      const fallbackMatch = input.match(/customer\s+[A-Za-z0-9_-]+\s+(\d+\.?\d*)\s*$/i);
+      if (fallbackMatch) {
+        command.amount = parseFloat(fallbackMatch[1]);
+      }
+    }
+
+    // Extract GL account
+    const glMatch = input.match(/(?:gl|account)\s*#?\s*([A-Za-z0-9_-]+)/i);
+    if (glMatch) {
+      command.glAccount = glMatch[1];
+    }
+
+    // Extract description
+    const descMatch = input.match(/description\s+["']([^"']+)["']/i) ||
+                      input.match(/desc\s+["']([^"']+)["']/i);
+    if (descMatch) {
+      command.description = descMatch[1];
     }
 
     return command;
@@ -602,6 +721,324 @@ async function handleGetAdjustment(
   }
 
   console.log();
+}
+
+async function handleCreateAdjustment(
+  client: SageClient,
+  memory: MemoryStore,
+  cmd: ParsedCommand
+): Promise<void> {
+  const count = cmd.count || 1;
+  printHeader(`Creating ${count} AR Adjustment(s)`);
+
+  // Get defaults from knowledge store
+  const knowledge = getKnowledgeStore();
+  const invoiceKnowledge = await knowledge.getActionKnowledge('invoice');
+  const defaults = await memory.getDefaults();
+
+  // Use command values or defaults
+  const customerId = cmd.customerId || invoiceKnowledge.workingDefaults.customerId || defaults.customerId;
+  const glAccountNo = cmd.glAccount || invoiceKnowledge.workingDefaults.glAccountNo?.toString() || defaults.glAccountNo;
+  const amount = cmd.amount || defaults.defaultAmount || 100;
+  const currency = invoiceKnowledge.workingDefaults.currency || defaults.currency || 'USD';
+  const locationId = invoiceKnowledge.workingDefaults.locationId?.toString();
+  const departmentId = invoiceKnowledge.workingDefaults.departmentId?.toString();
+
+  if (!customerId) {
+    printError('Customer ID is required');
+    printInfo('Usage: create adjustment for customer CUST-001');
+    printInfo('   or: set default customer CUST-001');
+    return;
+  }
+
+  if (!glAccountNo) {
+    printError('GL Account is required');
+    printInfo('Usage: create adjustment for customer CUST-001 gl account 60600');
+    printInfo('   or: set default account 60600');
+    return;
+  }
+
+  printInfo(`Starting values:`);
+  printInfo(`  Customer: ${customerId}`);
+  printInfo(`  GL Account: ${glAccountNo}`);
+  printInfo(`  Amount: ${formatCurrency(amount)}`);
+  printInfo(`  Currency: ${currency}`);
+  if (cmd.invoiceNo) {
+    printInfo(`  Invoice: ${cmd.invoiceNo}`);
+  }
+  if (locationId) {
+    printInfo(`  Location: ${locationId}`);
+  }
+  if (departmentId) {
+    printInfo(`  Department: ${departmentId}`);
+  }
+  console.log();
+
+  const createdAdjustments: Array<{ recordNo: string; recordId?: string; amount: number; success: boolean }> = [];
+  const failures: Array<{ index: number; error: string }> = [];
+
+  for (let i = 0; i < count; i++) {
+    if (count > 1) {
+      printInfo(`${chalk.bold(`Adjustment ${i + 1} of ${count}`)}`);
+    }
+
+    const result = await createArAdjustment(client, {
+      customerId,
+      amount,
+      invoiceNo: cmd.invoiceNo,
+      glAccountNo,
+      description: cmd.description || `AR Adjustment ${i + 1} created by Sage Agent`,
+      memo: `Adjustment ${i + 1}`,
+      currency,
+      locationId,
+      departmentId,
+    });
+
+    if (result.success && result.recordNo) {
+      printSuccess(`Created AR Adjustment: Record #${result.recordNo}${result.recordId ? ` (${result.recordId})` : ''}`);
+      
+      createdAdjustments.push({
+        recordNo: result.recordNo,
+        recordId: result.recordId,
+        amount,
+        success: true,
+      });
+    } else {
+      const errorMsg = result.error || 'Unknown error';
+      printError(`Failed to create adjustment: ${errorMsg}`);
+      
+      // Try to extract more details from raw response
+      if (result.rawResponse?.error) {
+        const errDetails = formatSageErrors(result.rawResponse.error);
+        if (errDetails) {
+          console.log(chalk.gray(`  Details: ${errDetails}`));
+        }
+      }
+      
+      failures.push({ index: i + 1, error: errorMsg });
+    }
+
+    if (count > 1 && i < count - 1) {
+      console.log();
+    }
+  }
+
+  // Summary
+  if (count > 1) {
+    console.log();
+    printHeader('Summary');
+    printInfo(`Created: ${createdAdjustments.length}`);
+    printInfo(`Failed: ${failures.length}`);
+
+    if (createdAdjustments.length > 0) {
+      console.log();
+      const columns = [
+        { key: 'recordNo', header: 'Record #', width: 15, format: formatRaw },
+        { key: 'recordId', header: 'Adjustment ID', width: 20, format: formatRaw },
+        { key: 'amount', header: 'Amount', width: 12, format: formatCurrency },
+      ];
+      console.log(createTable(createdAdjustments as unknown as Record<string, unknown>[], columns));
+    }
+
+    if (failures.length > 0) {
+      console.log();
+      printInfo(chalk.red('Failures:'));
+      for (const f of failures) {
+        console.log(`  ${chalk.red(`#${f.index}:`)} ${f.error}`);
+      }
+    }
+  }
+}
+
+// =============================================================================
+// Credit Memo Handlers
+// =============================================================================
+
+async function handleListCreditMemos(
+  client: SageClient, 
+  customerId: string, 
+  state?: string
+): Promise<void> {
+  const title = state 
+    ? `Credit Memos for Customer ${customerId} (${state})`
+    : `Credit Memos for Customer ${customerId}`;
+  printHeader(title);
+  
+  if (!customerId) {
+    printError('Customer ID is required');
+    printInfo('Usage: get creditmemos for customer CUST-001');
+    printInfo('       get creditmemos for customer CUST-001 status paid');
+    printInfo('       get creditmemos for customer CUST-001 posted');
+    return;
+  }
+
+  const result = await listCreditMemos(client, customerId, { state, pageSize: 50 });
+  
+  if (!result.success) {
+    printError(result.error || 'Failed to list credit memos');
+    return;
+  }
+
+  if (result.adjustments.length === 0) {
+    printInfo('No credit memos found for this customer');
+    return;
+  }
+
+  const columns = [
+    { key: 'RECORDID', header: 'Credit Memo ID', width: 15, format: formatRaw },
+    { key: 'RECORDNO', header: 'Record#', width: 10, format: formatRaw },
+    { key: 'RECORDTYPE', header: 'Type', width: 6 },
+    { key: 'WHENCREATED', header: 'Date', width: 12 },
+    { key: 'TRX_TOTALENTERED', header: 'Credit Amt', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'TRX_TOTALDUE', header: 'Available', width: 12, align: 'right' as const, format: formatCurrency },
+    { key: 'STATE', header: 'Status', width: 12, format: formatStatus },
+    { key: 'DESCRIPTION', header: 'Description', width: 20 },
+    { key: 'MEGAENTITYID', header: 'Entity', width: 8 },
+  ];
+
+  console.log(createTable(result.adjustments as unknown as Record<string, unknown>[], columns));
+  printInfo(`Found ${result.adjustments.length} credit memo(s)`);
+  
+  // Show totals
+  const totalCredit = result.adjustments.reduce((sum, adj) => 
+    sum + (Number(adj.TRX_TOTALENTERED) || 0), 0);
+  const totalAvailable = result.adjustments.reduce((sum, adj) => 
+    sum + (Number(adj.TRX_TOTALDUE) || 0), 0);
+  
+  console.log();
+  printInfo(`Total Credit: ${formatCurrency(totalCredit)}`);
+  printInfo(`Total Available: ${formatCurrency(totalAvailable)}`);
+}
+
+async function handleCreateCreditMemo(
+  client: SageClient,
+  memory: MemoryStore,
+  cmd: ParsedCommand
+): Promise<void> {
+  const count = cmd.count || 1;
+  printHeader(`Creating ${count} Credit Memo(s)`);
+
+  // Get defaults from knowledge store
+  const knowledge = getKnowledgeStore();
+  const invoiceKnowledge = await knowledge.getActionKnowledge('invoice');
+  const defaults = await memory.getDefaults();
+
+  // Use command values or defaults
+  const customerId = cmd.customerId || invoiceKnowledge.workingDefaults.customerId || defaults.customerId;
+  const glAccountNo = cmd.glAccount || invoiceKnowledge.workingDefaults.glAccountNo?.toString() || defaults.glAccountNo;
+  const amount = cmd.amount || defaults.defaultAmount || 25;  // Default credit amount
+  const currency = invoiceKnowledge.workingDefaults.currency || defaults.currency || 'USD';
+  const locationId = invoiceKnowledge.workingDefaults.locationId?.toString();
+  const departmentId = invoiceKnowledge.workingDefaults.departmentId?.toString();
+
+  if (!customerId) {
+    printError('Customer ID is required');
+    printInfo('Usage: create creditmemo for customer CUST-001');
+    printInfo('   or: set default customer CUST-001');
+    return;
+  }
+
+  if (!glAccountNo) {
+    printError('GL Account is required');
+    printInfo('Usage: create creditmemo for customer CUST-001 gl account 12100');
+    printInfo('   or: set default account 12100');
+    return;
+  }
+
+  printInfo(`Starting values:`);
+  printInfo(`  Customer: ${customerId}`);
+  printInfo(`  GL Account: ${glAccountNo}`);
+  printInfo(`  Credit Amount: ${formatCurrency(amount)} ${chalk.gray('(will be negated)')}`);
+  printInfo(`  Currency: ${currency}`);
+  if (locationId) {
+    printInfo(`  Location: ${locationId}`);
+  }
+  if (departmentId) {
+    printInfo(`  Department: ${departmentId}`);
+  }
+  console.log();
+
+  const createdMemos: Array<{ recordNo: string; recordId?: string; amount: number; success: boolean }> = [];
+  const failures: Array<{ index: number; error: string }> = [];
+
+  for (let i = 0; i < count; i++) {
+    if (count > 1) {
+      printInfo(`${chalk.bold(`Credit Memo ${i + 1} of ${count}`)}`);
+    }
+
+    const result = await createCreditMemo(client, {
+      customerId,
+      amount,  // Will be negated by the function
+      glAccountNo,
+      description: cmd.description || `Credit memo ${i + 1} created by Sage Agent`,
+      memo: `Credit available for checkout`,
+      currency,
+      baseCurrency: currency,
+      locationId,
+      departmentId,
+    });
+
+    if (result.success && result.recordNo) {
+      printSuccess(`Created Credit Memo: Record #${result.recordNo}${result.recordId ? ` (${result.recordId})` : ''}`);
+      printInfo(`  Amount: ${formatCurrency(-amount)} (credit)`);
+      
+      createdMemos.push({
+        recordNo: result.recordNo,
+        recordId: result.recordId,
+        amount: -amount,
+        success: true,
+      });
+    } else {
+      const errorMsg = result.error || 'Unknown error';
+      printError(`Failed to create credit memo: ${errorMsg}`);
+      
+      if (result.rawResponse?.error) {
+        const errDetails = formatSageErrors(result.rawResponse.error);
+        if (errDetails) {
+          console.log(chalk.gray(`  Details: ${errDetails}`));
+        }
+      }
+      
+      failures.push({ index: i + 1, error: errorMsg });
+    }
+
+    if (count > 1 && i < count - 1) {
+      console.log();
+    }
+  }
+
+  // Summary
+  if (count > 1) {
+    console.log();
+    printHeader('Summary');
+    printInfo(`Created: ${createdMemos.length}`);
+    printInfo(`Failed: ${failures.length}`);
+
+    if (createdMemos.length > 0) {
+      console.log();
+      const columns = [
+        { key: 'recordNo', header: 'Record #', width: 15, format: formatRaw },
+        { key: 'recordId', header: 'Credit Memo ID', width: 20, format: formatRaw },
+        { key: 'amount', header: 'Credit Amount', width: 15, format: formatCurrency },
+      ];
+      console.log(createTable(createdMemos as unknown as Record<string, unknown>[], columns));
+    }
+
+    if (failures.length > 0) {
+      console.log();
+      printInfo(chalk.red('Failures:'));
+      for (const f of failures) {
+        console.log(`  ${chalk.red(`#${f.index}:`)} ${f.error}`);
+      }
+    }
+  }
+
+  // Hint about verification
+  if (createdMemos.length > 0) {
+    console.log();
+    printInfo(`To verify: get creditmemos for customer ${customerId}`);
+    printInfo(`Credit memos should have RECORDTYPE=ra and negative amounts`);
+  }
 }
 
 async function handleListAccounts(client: SageClient): Promise<void> {
@@ -1976,6 +2413,20 @@ function showHelp(): void {
   console.log('  list adjustments for customer X');
   console.log('  get adjustment ADJ-001       Get adjustment by ID');
   console.log('  get adjustment 12345         Get adjustment by record number');
+  console.log('  create adjustment for customer X');
+  console.log('  create 5 adjustments for customer X');
+  console.log('  create adjustment customer X amount 100 gl account 60600');
+  console.log('  create adjustment customer X invoice INV12345');
+  console.log();
+
+  console.log(chalk.bold('Credit Memos (negative AR adjustments):'));
+  console.log('  get creditmemos for customer X    List credit memos (RECORDTYPE=ra)');
+  console.log('  get creditmemos customer X paid   Filter by status: paid');
+  console.log('  get creditmemos customer X posted Filter by status: posted');
+  console.log('  get creditmemos customer X status submitted');
+  console.log('  create creditmemo for customer X');
+  console.log('  create 5 creditmemos for customer X');
+  console.log('  create creditmemo customer X amount 25 gl account 12100');
   console.log();
 
   console.log(chalk.bold('Defaults & Learning:'));
@@ -2177,6 +2628,25 @@ async function main(): Promise<void> {
         recordNo: cmd.adjustmentRecordNo, 
         adjustmentId: cmd.adjustmentId 
       });
+      break;
+
+    case 'create-adjustment':
+      await handleCreateAdjustment(client, memory, cmd);
+      break;
+
+    case 'list-creditmemos':
+      if (!cmd.customerId) {
+        printError('Customer ID is required for listing credit memos');
+        printInfo('Usage: get creditmemos for customer CUST-001');
+        printInfo('       get creditmemos for customer CUST-001 status paid');
+        printInfo('       get creditmemos for customer CUST-001 posted');
+        return;
+      }
+      await handleListCreditMemos(client, cmd.customerId, cmd.state);
+      break;
+
+    case 'create-creditmemo':
+      await handleCreateCreditMemo(client, memory, cmd);
       break;
 
     default:
