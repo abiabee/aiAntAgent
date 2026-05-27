@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import chalk from 'chalk';
+import * as readline from 'readline/promises';
+import { stdin as input, stdout as output } from 'process';
 import { createClientFromEnv, SageClient } from './sage/client.js';
+import {
+  resolveSessionLocationId,
+  describeSessionLocationSource,
+  type SessionLocationSource,
+} from './sage/sessionLocation.js';
+import { listLocations } from './sage/actions/listDimensions.js';
 import { 
   getInvoice, 
   queryInvoiceById, 
@@ -75,6 +83,21 @@ function parseCommand(input: string): ParsedCommand {
   // Session commands
   if (lower.includes('session') || lower.includes('connect') || lower.includes('login')) {
     command.action = 'session';
+    if (
+      lower.includes('pick') ||
+      lower.includes('choose') ||
+      lower.includes('select location') ||
+      lower.includes('select entity')
+    ) {
+      command.options.pickLocation = 'true';
+    }
+    const locationMatch =
+      input.match(/(?:location|entity|loc)\s+(\d+)/i) ||
+      input.match(/(?:at|for)\s+(\d+)(?:\s|$)/i);
+    if (locationMatch) {
+      command.options.locationId = locationMatch[1];
+      delete command.options.pickLocation;
+    }
     return command;
   }
 
@@ -446,6 +469,12 @@ function parseCommand(input: string): ParsedCommand {
         command.options.defaultAmount = match[1];
       }
     }
+    if (lower.includes('location') || lower.includes('entity')) {
+      const match = input.match(/(?:location|entity)\s+(\d+)/i);
+      if (match) {
+        command.options.locationId = match[1];
+      }
+    }
     return command;
   }
 
@@ -463,19 +492,139 @@ function parseCommand(input: string): ParsedCommand {
 // Command Handlers
 // =============================================================================
 
-async function handleSession(client: SageClient): Promise<void> {
-  printHeader('Creating Sage Intacct Session');
-  
+function formatLocationSource(source: SessionLocationSource): string {
+  switch (source) {
+    case 'command':
+      return 'command argument';
+    case 'defaults.json':
+      return 'data/defaults.json';
+    case 'env':
+      return 'SAGE_LOCATION_ID (.env)';
+    default:
+      return 'none (company-wide session)';
+  }
+}
+
+async function promptForLocationId(
+  locations: Array<{ LOCATIONID: string; NAME?: string }>
+): Promise<string | undefined> {
+  console.log();
+  console.log(chalk.bold('Available locations:'));
+  for (let i = 0; i < locations.length; i++) {
+    const loc = locations[i];
+    const name = loc.NAME ? ` — ${loc.NAME}` : '';
+    console.log(`  ${chalk.cyan(String(i + 1))}. ${loc.LOCATIONID}${name}`);
+  }
+  console.log(`  ${chalk.gray('0')}. Company-wide (no entity)`);
+  console.log();
+
+  const rl = readline.createInterface({ input, output });
   try {
-    const session = await client.createSession();
+    const answer = await rl.question(
+      chalk.bold('Enter location number or ID (default from defaults.json): ')
+    );
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (trimmed === '0') {
+      return '';
+    }
+    const asIndex = parseInt(trimmed, 10);
+    if (!Number.isNaN(asIndex) && asIndex >= 1 && asIndex <= locations.length) {
+      return locations[asIndex - 1].LOCATIONID;
+    }
+    const byId = locations.find((l) => l.LOCATIONID === trimmed);
+    if (byId) {
+      return byId.LOCATIONID;
+    }
+    return trimmed;
+  } finally {
+    rl.close();
+  }
+}
+
+async function handleSession(
+  client: SageClient,
+  cmd: ParsedCommand,
+  memory: MemoryStore
+): Promise<void> {
+  printHeader('Creating Sage Intacct Session');
+
+  try {
+    const defaults = await memory.getDefaults();
+
+    if (cmd.options.pickLocation) {
+      printInfo('Opening bootstrap session to list locations...');
+      client.clearSession();
+      await client.createSession(null);
+
+      const locResult = await listLocations(client, { pageSize: 100 });
+      if (!locResult.success || locResult.locations.length === 0) {
+        printError(locResult.error || 'No locations returned from Sage');
+        return;
+      }
+
+      const picked = await promptForLocationId(locResult.locations);
+      client.clearSession();
+
+      let sessionLocation: string | null | undefined;
+      let source: SessionLocationSource;
+      if (picked === '') {
+        sessionLocation = null;
+        source = 'none';
+      } else if (picked) {
+        sessionLocation = picked;
+        source = 'command';
+      } else {
+        sessionLocation = resolveSessionLocationId(cmd.options.locationId, defaults);
+        source = describeSessionLocationSource(cmd.options.locationId, defaults);
+      }
+
+      const session = await client.createSession(sessionLocation);
+      printSuccess('Session created successfully!');
+      printSessionSummary(session, source, session.locationId);
+      return;
+    }
+
+    const locationId = resolveSessionLocationId(cmd.options.locationId, defaults);
+    const source = describeSessionLocationSource(cmd.options.locationId, defaults);
+
+    if (locationId) {
+      printInfo(`Using location ${locationId} (from ${formatLocationSource(source)})`);
+    } else {
+      printInfo('No location set — opening company-wide session');
+    }
+
+    const session = await client.createSession(locationId);
     printSuccess('Session created successfully!');
-    printKeyValues({
-      'Session ID': session.sessionId.substring(0, 30) + '...',
-      'Endpoint': session.endpoint,
-      'Created': session.createdAt.toISOString(),
-    });
+    printSessionSummary(session, source, locationId);
   } catch (error) {
     printError(`Failed to create session: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
+function printSessionSummary(
+  session: { locationId?: string; sessionId: string; endpoint: string; createdAt: Date },
+  source: SessionLocationSource,
+  requestedLocationId?: string
+): void {
+  const locationDisplay = session.locationId
+    ? session.locationId
+    : chalk.gray('(company-wide — no entity)');
+
+  printKeyValues({
+    'Location ID': locationDisplay,
+    'Location source': formatLocationSource(source),
+    'Session ID': session.sessionId.substring(0, 30) + '...',
+    'Endpoint': session.endpoint,
+    'Created': session.createdAt.toISOString(),
+  });
+
+  if (requestedLocationId && session.locationId !== requestedLocationId) {
+    printError(
+      `Requested location ${requestedLocationId} but session reports ${session.locationId ?? 'none'}`
+    );
   }
 }
 
@@ -758,8 +907,12 @@ async function handleCreateAdjustment(
   const glAccountNo = cmd.glAccount || invoiceKnowledge.workingDefaults.glAccountNo?.toString() || defaults.glAccountNo;
   const amount = cmd.amount || defaults.defaultAmount || 100;
   const currency = invoiceKnowledge.workingDefaults.currency || defaults.currency || 'USD';
-  const locationId = invoiceKnowledge.workingDefaults.locationId?.toString();
-  const departmentId = invoiceKnowledge.workingDefaults.departmentId?.toString();
+  const locationId =
+    invoiceKnowledge.workingDefaults.locationId?.toString() ||
+    defaults.locationId?.toString();
+  const departmentId =
+    invoiceKnowledge.workingDefaults.departmentId?.toString() ||
+    defaults.departmentId?.toString();
 
   if (!customerId) {
     printError('Customer ID is required');
@@ -945,8 +1098,12 @@ async function handleCreateCreditMemo(
   const glAccountNo = cmd.glAccount || invoiceKnowledge.workingDefaults.glAccountNo?.toString() || defaults.glAccountNo;
   const amount = cmd.amount || defaults.defaultAmount || 25;  // Default credit amount
   const currency = invoiceKnowledge.workingDefaults.currency || defaults.currency || 'USD';
-  const locationId = invoiceKnowledge.workingDefaults.locationId?.toString();
-  const departmentId = invoiceKnowledge.workingDefaults.departmentId?.toString();
+  const locationId =
+    invoiceKnowledge.workingDefaults.locationId?.toString() ||
+    defaults.locationId?.toString();
+  const departmentId =
+    invoiceKnowledge.workingDefaults.departmentId?.toString() ||
+    defaults.departmentId?.toString();
 
   if (!customerId) {
     printError('Customer ID is required');
@@ -2344,6 +2501,10 @@ async function handleSetDefault(memory: MemoryStore, options: Record<string, str
     updates.defaultAmount = parseFloat(options.defaultAmount);
     printSuccess(`Default amount set to: ${formatCurrency(updates.defaultAmount)}`);
   }
+  if (options.locationId) {
+    updates.locationId = options.locationId;
+    printSuccess(`Default location set to: ${options.locationId}`);
+  }
 
   if (Object.keys(updates).length === 0) {
     printError('No defaults specified to set');
@@ -2372,6 +2533,7 @@ function handleStatus(client: SageClient): void {
   
   printKeyValues({
     'Session Active': sessionInfo.hasSession ? chalk.green('Yes') : chalk.red('No'),
+    'Location ID': sessionInfo.locationId || chalk.gray('(none)'),
     'Session Age': sessionInfo.sessionAge ? `${sessionInfo.sessionAge} seconds` : '-',
     'Endpoint': sessionInfo.endpoint || '-',
   });
@@ -2381,7 +2543,9 @@ function showHelp(): void {
   printHeader('Sage Intacct Action Agent - Commands');
 
   console.log(chalk.bold('Session:'));
-  console.log('  session, connect, login      Create a new API session');
+  console.log('  session, connect, login      Create session (uses data/defaults.json location)');
+  console.log('  session location 100         Create session for entity/location 100');
+  console.log('  session pick location        List locations and choose interactively');
   console.log('  status                       Show current session status');
   console.log();
 
@@ -2522,7 +2686,7 @@ async function main(): Promise<void> {
   // Handle Sage commands
   switch (cmd.action) {
     case 'session':
-      await handleSession(client);
+      await handleSession(client, cmd, memory);
       break;
 
     case 'status':

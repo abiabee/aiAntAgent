@@ -2,7 +2,7 @@
   "customerId": "25182",
   "glAccountNo": "10100",
   "accountLabel": null,
-  "locationId": 700,
+  "locationId": "700",
   "departmentId": null,
   "currency": "USD",
   "termName": null,

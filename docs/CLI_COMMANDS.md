@@ -17,18 +17,23 @@ npm run agent "<command>"
 Manage your Sage Intacct API connection.
 
 
-| Command   | Description                                            |
-| --------- | ------------------------------------------------------ |
-| `session` | Create a new API session and test connectivity         |
-| `connect` | Alias for `session`                                    |
-| `login`   | Alias for `session`                                    |
-| `status`  | Display current session status (active, age, endpoint) |
+| Command                    | Description                                                                 |
+| -------------------------- | --------------------------------------------------------------------------- |
+| `session`                  | Create API session using `locationId` from `data/defaults.json`             |
+| `session location <ID>`    | Create session for a specific entity/location                               |
+| `session pick location`    | List locations interactively, then open session for your choice             |
+| `connect` / `login`        | Aliases for `session`                                                       |
+| `status`                   | Display session status (active, location, age, endpoint)                    |
 
+
+Location resolution order: **command argument** → **`data/defaults.json`** → **`SAGE_LOCATION_ID` in `.env`**.
 
 **Examples:**
 
 ```bash
 npm run agent "session"
+npm run agent "session location 100"
+npm run agent "session pick location"
 npm run agent "status"
 ```
 

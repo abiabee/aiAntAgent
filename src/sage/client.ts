@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import { SageCredentials, wrapRequest, compileTemplate } from './templates/common.js';
 import { parseResponse, SageResponse } from './parser.js';
 import { getAPISessionTemplate, GetAPISessionData } from './templates/auth.js';
+import { resolveSessionLocationId } from './sessionLocation.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -11,10 +12,14 @@ export interface SageSession {
   sessionId: string;
   endpoint: string;
   createdAt: Date;
+  /** Entity/location used for getAPISession, if any */
+  locationId?: string;
 }
 
 export interface SageClientConfig {
   credentials: SageCredentials;
+  /** Preferred entity/location (from defaults.json, env, or CLI) */
+  defaultLocationId?: string;
   outputDir?: string;
   debug?: boolean;
 }
@@ -25,6 +30,7 @@ export interface SageClientConfig {
  */
 export class SageClient {
   private credentials: SageCredentials;
+  private defaultLocationId?: string;
   private session: SageSession | null = null;
   private httpClient: AxiosInstance;
   private outputDir: string;
@@ -33,6 +39,7 @@ export class SageClient {
 
   constructor(config: SageClientConfig) {
     this.credentials = config.credentials;
+    this.defaultLocationId = config.defaultLocationId;
     this.outputDir = config.outputDir || './outputs/xml';
     this.debug = config.debug || false;
 
@@ -55,12 +62,18 @@ export class SageClient {
   }
 
   /**
-   * Create a new API session
+   * Create a new API session.
+   * @param locationId Explicit entity/location, or `null` to open a company-wide session (no entity).
    */
-  async createSession(locationId?: string): Promise<SageSession> {
+  async createSession(locationId?: string | null): Promise<SageSession> {
     const data: GetAPISessionData = {};
-    if (locationId || this.credentials.locationId) {
-      data.locationId = locationId || this.credentials.locationId;
+    const effectiveLocationId =
+      locationId === null
+        ? undefined
+        : locationId ?? this.defaultLocationId ?? this.credentials.locationId;
+
+    if (effectiveLocationId) {
+      data.locationId = effectiveLocationId;
     }
 
     const functionContent = compileTemplate(getAPISessionTemplate, data);
@@ -83,11 +96,15 @@ export class SageClient {
       sessionId: response.sessionId,
       endpoint: response.endpoint,
       createdAt: new Date(),
+      locationId: effectiveLocationId,
     };
 
     if (this.debug) {
       console.log(`[SageClient] Session created: ${this.session.sessionId.substring(0, 20)}...`);
       console.log(`[SageClient] Endpoint: ${this.session.endpoint}`);
+      console.log(
+        `[SageClient] Location: ${effectiveLocationId ?? '(company-wide — no entity)'}`
+      );
     }
 
     return this.session;
@@ -208,7 +225,12 @@ export class SageClient {
   /**
    * Get session info (for debugging)
    */
-  getSessionInfo(): { hasSession: boolean; sessionAge?: number; endpoint?: string } {
+  getSessionInfo(): {
+    hasSession: boolean;
+    sessionAge?: number;
+    endpoint?: string;
+    locationId?: string;
+  } {
     if (!this.session) {
       return { hasSession: false };
     }
@@ -220,6 +242,7 @@ export class SageClient {
       hasSession: true,
       sessionAge,
       endpoint: this.session.endpoint,
+      locationId: this.session.locationId,
     };
   }
 }
@@ -234,8 +257,8 @@ export function createClientFromEnv(debug = false): SageClient {
     companyId: process.env.SAGE_COMPANY_ID || '',
     userId: process.env.SAGE_USER_ID || '',
     userPassword: process.env.SAGE_USER_PASSWORD || '',
-    locationId: process.env.SAGE_LOCATION_ID || undefined,
   };
+  const defaultLocationId = resolveSessionLocationId();
 
   // Validate required credentials
   const missing: string[] = [];
@@ -251,6 +274,7 @@ export function createClientFromEnv(debug = false): SageClient {
 
   return new SageClient({
     credentials,
+    defaultLocationId,
     debug,
   });
 }

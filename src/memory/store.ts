@@ -31,8 +31,8 @@ export interface Defaults {
   customerId?: string;
   glAccountNo?: string;
   accountLabel?: string;
-  locationId?: string;
-  departmentId?: string;
+  locationId?: string | number;
+  departmentId?: string | number;
   currency?: string;
   termName?: string;
   defaultAmount?: number;

@@ -70,6 +70,7 @@ server.tool(
             type: 'text' as const,
             text: JSON.stringify({
               status: 'connected',
+              locationId: session.locationId ?? null,
               endpoint: session.endpoint,
               sessionCreated: session.createdAt.toISOString(),
               message: 'Successfully connected to Sage Intacct!',
