@@ -4,7 +4,7 @@
  */
 
 import { SageClient } from './client.js';
-import { createPayment, formatDateForSage } from './actions/payment.js';
+import { createPayment, formatDateForSage, getPayment } from './actions/payment.js';
 import type { CreatePaymentResult, PaymentInvoice } from './actions/payment.js';
 import { getInvoice } from './actions/invoice.js';
 import { listAllBankAccounts } from './actions/bankAccount.js';
@@ -42,6 +42,7 @@ export interface PaymentLearningAttempt {
 export interface PaymentLearningResult {
   success: boolean;
   recordNo?: string;
+  paymentId?: string;
   invoiceId?: string;
   amountPaid?: number;
   attempts: PaymentLearningAttempt[];
@@ -174,9 +175,16 @@ export async function createPaymentWithLearning(
         currency: currency,
       });
 
+      let paymentId = result.paymentId;
+      if (result.recordNo && !paymentId) {
+        const paymentDetails = await getPayment(client, result.recordNo);
+        paymentId = paymentDetails.payment?.DOCNUMBER;
+      }
+
       return {
         success: true,
         recordNo: result.recordNo,
+        paymentId,
         invoiceId,
         amountPaid: paymentAmount,
         attempts,

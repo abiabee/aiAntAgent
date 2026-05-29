@@ -274,15 +274,18 @@ npm run agent "list payments for customer 10014"
 
 | Command                  | Description                          |
 | ------------------------ | ------------------------------------ |
-| `get payment <RECORDNO>` | Get payment details by record number |
+| `get payment <RECORDNO>` | Get payment by record number |
+| `get payment <PAYMENT_ID>` | Get payment by Payment ID (DOCNUMBER) |
 
 
 The payment detail view displays:
 
-- Payment amount and status
-- Payment method and date
-- Bank account used
-- Applied invoices
+- **Payment ID** (`DOCNUMBER`) and record number
+- Payment method, dates, bank account, and entity/location
+- **Invoices Paid** table: Invoice ID, record #, cash, credits, total, credit types
+- **Credits Breakdown** table (when credits exist): memo, inline, advance, negative invoice, overpayment
+
+Amount logic follows roadrunner's `getCombinedAmountFromPayments` — each invoice line sums cash (`TRX_PAYMENTAMOUNT`) plus credit types (`TRX_ADJUSTMENTAMOUNT`, `TRX_INLINEAMOUNT`, advances, negative invoices, overpayments).
 
 **Examples:**
 

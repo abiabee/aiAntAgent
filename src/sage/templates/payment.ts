@@ -92,13 +92,67 @@ export interface QueryArPaymentsData {
 }
 
 /**
+ * Query AR Payment by document number (Payment ID / DOCNUMBER)
+ * roadrunner getARPaymentByDocNo
+ */
+export const queryArPaymentByDocNoTemplate = `
+<query>
+  <object>ARPYMT</object>
+  <select>
+    <field>RECORDNO</field>
+    <field>DOCNUMBER</field>
+  </select>
+  <filter>
+    <equalto>
+      <field>DOCNUMBER</field>
+      <value>{{docNumber}}</value>
+    </equalto>
+  </filter>
+  <pagesize>1</pagesize>
+</query>`;
+
+export interface QueryArPaymentByDocNoData {
+  docNumber: string;
+}
+
+/**
  * Read AR Payment by RECORDNO
+ * Explicit nested fields (roadrunner getARPayment template)
  */
 export const readArPaymentTemplate = `
 <read>
   <object>ARPYMT</object>
   <keys>{{recordNo}}</keys>
-  <fields>*</fields>
+  <fields>
+    RECORDNO,
+    DOCNUMBER,
+    CUSTOMERID,
+    CUSTOMERNAME,
+    PAYMENTMETHOD,
+    RECEIPTDATE,
+    PAYMENTDATE,
+    WHENPAID,
+    STATE,
+    CURRENCY,
+    BASECURR,
+    FINANCIALENTITY,
+    FINANCIALACCOUNTCURRENCY,
+    BANKACCOUNTID,
+    TRX_TOTALPAID,
+    TRX_TOTALSELECTED,
+    TRX_TOTALENTERED,
+    TOTALPAID,
+    TOTALSELECTED,
+    TOTALENTERED,
+    LOCATIONID,
+    ARPYMTENTRIES,
+    ARPYMTDETAILS,
+    WHENCREATED,
+    WHENMODIFIED,
+    AUWHENCREATED,
+    CREATEDBY,
+    MODIFIEDBY
+  </fields>
 </read>`;
 
 export interface ReadArPaymentData {

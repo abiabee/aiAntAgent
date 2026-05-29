@@ -23,6 +23,7 @@ import type { Customer, CustomerFull, CustomerContact, CustomerAddress, Customer
 import { listGlAccounts, listAccountLabels, GlAccount, AccountLabel } from './sage/actions/listGlAccounts.js';
 import { listAllBankAccounts, BankAccount } from './sage/actions/bankAccount.js';
 import { listPayments, getPayment, Payment, PaymentFull, PaymentDetail } from './sage/actions/payment.js';
+import { formatCreditSources } from './sage/paymentUtils.js';
 import { listArAdjustments, getArAdjustment, queryArAdjustmentById, createArAdjustment, listCreditMemos, createCreditMemo } from './sage/actions/aradjustment.js';
 import type { ArAdjustment, CreateArAdjustmentResult } from './sage/actions/aradjustment.js';
 import { getMemoryStore, MemoryStore } from './memory/store.js';
@@ -218,8 +219,7 @@ function parseCommand(input: string): ParsedCommand {
       }
     } else if (lower.includes('payment')) {
       command.action = 'get-payment';
-      // Extract payment record number
-      const match = lower.match(/payment\s*#?\s*(\d+)/i);
+      const match = input.match(/payment\s+([A-Za-z0-9_-]+)/i);
       if (match) {
         command.paymentRecordNo = match[1];
       }
@@ -2143,7 +2143,7 @@ async function handleListPayments(client: SageClient, customerId?: string): Prom
 
   const columns = [
     { key: 'RECORDNO', header: 'Record #', width: 12, format: formatRaw },
-    { key: 'DOCNUMBER', header: 'Doc #', width: 15, format: formatRaw },
+    { key: 'DOCNUMBER', header: 'Payment ID', width: 15, format: formatRaw },
     { key: 'CUSTOMERID', header: 'Customer', width: 15, format: formatRaw },
     { key: 'TRX_TOTALPAID', header: 'Amount', width: 12, align: 'right' as const, format: formatCurrency },
     { key: 'PAYMENTMETHOD', header: 'Method', width: 12 },
@@ -2172,6 +2172,8 @@ async function handleGetPayment(client: SageClient, recordNo: string): Promise<v
   }
 
   const payment = result.payment;
+  const applications = result.applications || [];
+  const summary = result.amountSummary;
   
   // Status styling
   const stateColor = payment.STATE === 'Posted' ? chalk.green :
@@ -2179,49 +2181,162 @@ async function handleGetPayment(client: SageClient, recordNo: string): Promise<v
                      payment.STATE === 'Submitted' ? chalk.yellow : chalk.white;
 
   console.log();
-  console.log(chalk.bold(`Payment -- ${payment.DOCNUMBER || payment.RECORDNO}`));
+  console.log(chalk.bold(`Payment — ${payment.DOCNUMBER || payment.RECORDNO}`));
   console.log(chalk.gray('─'.repeat(60)));
   console.log();
   
-  // Quick stats
-  const amount = Number(payment.TRX_TOTALPAID || 0);
-  const currency = payment.CURRENCY || 'USD';
+  const currency = summary?.currency || payment.CURRENCY || 'USD';
+  const totalPaid = summary?.totalPaid ?? Number(payment.TRX_TOTALPAID || 0);
+  const totalSelected = summary?.totalSelected ?? Number(payment.TRX_TOTALSELECTED || totalPaid);
+  const totalCash = summary?.totalCash ?? 0;
+  const totalCredits = summary?.totalCredits ?? 0;
   
   printKeyValues({
+    'Payment ID': payment.DOCNUMBER || '-',
     'Record No': payment.RECORDNO || '-',
-    'Doc Number': payment.DOCNUMBER || '-',
-    'Customer': payment.CUSTOMERID || '-',
-    'Amount': `${formatCurrency(amount)} ${currency}`,
+    'Customer': payment.CUSTOMERNAME
+      ? `${payment.CUSTOMERID} — ${payment.CUSTOMERNAME}`
+      : payment.CUSTOMERID || '-',
+    'Total Paid': `${formatCurrency(totalPaid)} ${currency}`,
+    'Total Selected': `${formatCurrency(totalSelected)} ${currency}`,
+    'Cash Applied': `${formatCurrency(totalCash)} ${currency}`,
+    'Credits Applied': `${formatCurrency(totalCredits)} ${currency}`,
     'State': stateColor(payment.STATE || '-'),
   });
 
   console.log();
-  console.log(chalk.bold.cyan('Payment Details'));
+  console.log(chalk.bold.cyan('Payment Info'));
   console.log();
   
   printKeyValues({
     'Payment Method': payment.PAYMENTMETHOD || '-',
     'Receipt Date': payment.RECEIPTDATE || '-',
-    'Payment Date': payment.PAYMENTDATE || '-',
+    'Payment Date': payment.PAYMENTDATE || payment.WHENPAID || '-',
     'Bank Account': payment.FINANCIALENTITY || payment.BANKACCOUNTID || '-',
+    'Entity / Location': payment.LOCATIONID || '-',
     'Currency': currency,
   });
 
-  // Payment line items
-  const details = payment.ARPYMTDETAILS?.arpymtdetail;
-  if (details) {
-    const items = Array.isArray(details) ? details : [details];
+  if (applications.length > 0) {
     console.log();
-    console.log(chalk.bold.cyan(`Applied to Invoices (${items.length})`));
+    console.log(chalk.bold.cyan(`Invoices Paid (${applications.length})`));
     console.log();
-    
-    const detailColumns = [
-      { key: 'RECORDKEY', header: 'Invoice #', width: 15, format: formatRaw },
-      { key: 'TRX_PAYMENTAMOUNT', header: 'Amount', width: 15, align: 'right' as const, format: formatCurrency },
-      { key: 'ENTRYDESCRIPTION', header: 'Description', width: 30 },
+
+    const invoiceColumns = [
+      {
+        key: 'invoiceId',
+        header: 'Invoice ID',
+        width: 14,
+        format: (v: unknown) => (v ? String(v) : chalk.gray('—')),
+      },
+      { key: 'invoiceRecordNo', header: 'Record #', width: 10, format: formatRaw },
+      {
+        key: 'cashAmount',
+        header: 'Cash',
+        width: 12,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'creditAmount',
+        header: 'Credits',
+        width: 12,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'totalApplied',
+        header: 'Total',
+        width: 12,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'creditSources',
+        header: 'Credit Types',
+        width: 28,
+      },
     ];
-    
-    console.log(createTable(items as unknown as Record<string, unknown>[], detailColumns));
+
+    const rows = applications.map((app) => ({
+      invoiceId: app.invoiceId,
+      invoiceRecordNo: app.invoiceRecordNo,
+      cashAmount: app.cashAmount,
+      creditAmount: app.creditAmount,
+      totalApplied: app.totalApplied,
+      creditSources: formatCreditSources(app.credits),
+    }));
+
+    console.log(createTable(rows as unknown as Record<string, unknown>[], invoiceColumns));
+  } else {
+    console.log();
+    printInfo('No invoice applications found on this payment');
+  }
+
+  const creditOnlyRows = applications.filter((app) => app.creditAmount > 0);
+  if (creditOnlyRows.length > 0) {
+    console.log();
+    console.log(chalk.bold.cyan('Credits Breakdown'));
+    console.log();
+
+    const creditColumns = [
+      {
+        key: 'invoiceId',
+        header: 'Invoice ID',
+        width: 14,
+        format: (v: unknown) => (v ? String(v) : chalk.gray('—')),
+      },
+      { key: 'invoiceRecordNo', header: 'Record #', width: 10, format: formatRaw },
+      {
+        key: 'adjustment',
+        header: 'Memo',
+        width: 10,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'inline',
+        header: 'Inline',
+        width: 10,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'advance',
+        header: 'Advance',
+        width: 10,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'negativeInvoice',
+        header: 'Neg Inv',
+        width: 10,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      {
+        key: 'overpayment',
+        header: 'Overpay',
+        width: 10,
+        align: 'right' as const,
+        format: formatCurrency,
+      },
+      { key: 'adjustmentKey', header: 'Adj Key', width: 12, format: formatRaw },
+    ];
+
+    const creditRows = creditOnlyRows.map((app) => ({
+      invoiceId: app.invoiceId,
+      invoiceRecordNo: app.invoiceRecordNo,
+      adjustment: app.credits.adjustment,
+      inline: app.credits.inline,
+      advance: app.credits.advance,
+      negativeInvoice: app.credits.negativeInvoice,
+      overpayment: app.credits.overpayment,
+      adjustmentKey: app.adjustmentKey || '-',
+    }));
+
+    console.log(createTable(creditRows as unknown as Record<string, unknown>[], creditColumns));
   }
 
   // Audit info
@@ -2324,7 +2439,8 @@ async function handlePayInvoice(
   if (result.success) {
     printSuccess(`Payment created successfully!`);
     printKeyValues({
-      'Payment Record': result.recordNo || '-',
+      'Payment ID': result.paymentId || '-',
+      'Record No': result.recordNo || '-',
       'Invoice': result.invoiceId || invoiceRecordNo,
       'Amount Paid': formatCurrency(result.amountPaid || paymentAmount),
       'Attempts': result.attempts.length,
@@ -2569,7 +2685,7 @@ function showHelp(): void {
   console.log('  get customer 10014           Get customer details by ID');
   console.log('  get customer "Acme Corp"     Search customer by name');
   console.log('  get customer 10014 contact   View all contact sections');
-  console.log('  get payment 12345            Get payment by record number');
+  console.log('  get payment 12345            Get payment by record number or Payment ID');
   console.log('  get adjustment ADJ-001       Get AR adjustment by ID');
   console.log();
 

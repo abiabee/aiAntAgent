@@ -181,6 +181,30 @@ export interface QueryMultipleInvoicesData {
 }
 
 /**
+ * Query invoices by internal RECORDNO (for payment application enrichment)
+ */
+export const queryInvoicesByRecordNosTemplate = `
+<query>
+  <object>ARINVOICE</object>
+  <select>
+    <field>RECORDNO</field>
+    <field>RECORDID</field>
+  </select>
+  <filter>
+    <in>
+      <field>RECORDNO</field>
+      {{#each recordNos}}
+      <value>{{this}}</value>
+      {{/each}}
+    </in>
+  </filter>
+</query>`;
+
+export interface QueryInvoicesByRecordNosData {
+  recordNos: string[];
+}
+
+/**
  * Create AR Invoice
  * Creates a new accounts receivable invoice
  */
